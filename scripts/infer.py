@@ -33,6 +33,7 @@ def main() -> int:
     ap.add_argument("--ckpt", type=Path, required=True)
     ap.add_argument("--out", type=Path, default=Path("runs/pred_masks"))
     ap.add_argument("--split", default="all")
+    ap.add_argument("--split-key", default="split_a", choices=["split_a", "split_c"])
     a = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -45,7 +46,7 @@ def main() -> int:
     if a.split == "all":
         rows = read_manifest(a.datasets / "manifest.csv")
     else:
-        rows = load_rows(a.datasets, a.split)
+        rows = load_rows(a.datasets, a.split, a.split_key)
     ds = TileDataset(a.datasets, rows)
     a.out.mkdir(parents=True, exist_ok=True)
 

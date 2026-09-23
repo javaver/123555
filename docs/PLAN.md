@@ -238,3 +238,8 @@ datasets/, runs/  → .gitignore（大文件外置）
     infer 9 张掩膜、analyze pred 模式全通；
   - 预训练权重下载未在沙箱验证（HF 被墙）：模型 ID 已被 timm 识别（进入 dinov3 factory），
     用户侧若下载受阻设 `HF_ENDPOINT=https://hf-mirror.com`。
+- **空间泄漏对策（对用户质疑的回应）**：划分 A 为按图随机(仅主导类分层)，
+  不抗空间自相关；新增 `tools/tiling_check.py`（全量验证切瓦步长：512=无重叠网格，
+  <512=重叠切分需警惕真重复泄漏）与**划分 C 空间块**（1024² 成块整块进折，
+  splits.csv 增 split_c 列；train/eval/infer 增 `--split-key split_c` 可切换）。
+  论文三档并报：A 对标论文、C 空间去偏、B 整村留出。

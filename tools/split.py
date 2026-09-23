@@ -9,12 +9,15 @@
   层内 shuffle 后按 70/15/15 切; 并打印各折的类别像素占比平衡报告。
 划分 B (泛化口径): 村庄级留出——shuffle 村庄, 前 2 个做 test, 第 3 个做 val,
   其余 train; 村庄数不足时降级并告警。
+划分 C (空间去偏口径): 1024x1024 空间块(2x2 瓦片)整块进同一折,
+  按村以瓦片数贪心配 70/15/15, 消除随机切分下邻片同折泄漏造成的指标虚高。
 类别权重等统计只允许用 split_a==train 的样本(下游自行过滤)。
 """
 from __future__ import annotations
 
 import argparse
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -79,6 +82,39 @@ def split_b(rows: list[dict], rng: random.Random) -> dict:
     return out
 
 
+def block_key(r: dict, block: int = 1024):
+    m = re.match(r"tile_(\d+)_(\d+)", r["tile"])
+    if not m:
+        return (r["village"], r["tile"])  # 名字不规则: 自成一块
+    x, y = map(int, m.groups())
+    return (r["village"], x // block, y // block)
+
+
+def split_c(rows: list[dict], ratios: list[float], rng: random.Random) -> dict:
+    blocks: dict[tuple, list[dict]] = {}
+    for r in rows:
+        blocks.setdefault(block_key(r), []).append(r)
+    per_village: dict[str, list] = {}
+    for k, members in blocks.items():
+        per_village.setdefault(k[0], []).append(members)
+
+    out = {}
+    for v, blks in per_village.items():
+        rng.shuffle(blks)
+        total = sum(len(m) for m in blks)
+        targets = {"train": total * ratios[0], "val": total * ratios[1],
+                   "test": total * ratios[2]}
+        cnt = {"train": 0, "val": 0, "test": 0}
+        for members in blks:  # 整块分给"缺口最大"的折
+            s = max(cnt, key=lambda k: targets[k] - cnt[k])
+            cnt[s] += len(members)
+            for r in members:
+                out[(r["village"], r["tile"])] = s
+        if cnt["val"] == 0 or cnt["test"] == 0:
+            print(f"  [warn] 划分 C 村 {v} 块数过少, 折分布 {cnt}")
+    return out
+
+
 def report_balance(rows: list[dict], assign: dict, name: str) -> None:
     tot = {n: 0 for n in CLASS_NAMES}
     per = {s: {n: 0 for n in CLASS_NAMES} for s in ("train", "val", "test")}
@@ -117,23 +153,25 @@ def main() -> int:
         print("先运行 build_masks.py (manifest 中存在无掩膜样本)", file=sys.stderr)
         return 2
 
-    rng_a, rng_b = random.Random(a.seed), random.Random(a.seed + 1)
-    sa = split_a(rows, a.ratios, rng_a)
-    sb = split_b(rows, rng_b)
+    rngs = {k: random.Random(a.seed + i) for i, k in enumerate(("a", "b", "c"))}
+    sa = split_a(rows, a.ratios, rngs["a"])
+    sb = split_b(rows, rngs["b"])
+    sc = split_c(rows, a.ratios, rngs["c"])
 
     out = a.datasets / "splits.csv"
     with open(out, "w", encoding="utf-8-sig", newline="") as fh:
-        fh.write("village,tile,split_a,split_b\n")
+        fh.write("village,tile,split_a,split_b,split_c\n")
         for r in rows:
             k = (r["village"], r["tile"])
-            fh.write(f"{r['village']},{r['tile']},{sa[k]},{sb[k]}\n")
+            fh.write(f"{r['village']},{r['tile']},{sa[k]},{sb[k]},{sc[k]}\n")
 
-    for name, m in (("A", sa), ("B", sb)):
+    for name, m in (("A", sa), ("B", sb), ("C", sc)):
         cnt = {"train": 0, "val": 0, "test": 0}
         for v in m.values():
             cnt[v] += 1
         print(f"划分 {name}: train={cnt['train']} val={cnt['val']} test={cnt['test']}")
     report_balance(rows, sa, "A")
+    report_balance(rows, sc, "C")
     print(f"splits -> {out}")
     return 0
 

@@ -27,13 +27,13 @@ from dinoseg import ConfusionMeter, DINOvSeg, SegLoss
 from dinoseg.dataset import TileDataset
 
 
-def load_rows(datasets: Path, want: str):
+def load_rows(datasets: Path, want: str, key: str = "split_a"):
     splits = {}
     with open(datasets / "splits.csv", encoding="utf-8-sig") as fh:
         for row in csv.DictReader(fh):
             splits[(row["village"], row["tile"])] = row
     return [r for r in read_manifest(datasets / "manifest.csv")
-            if splits[(r["village"], r["tile"])]["split_a"] == want]
+            if splits[(r["village"], r["tile"])][key] == want]
 
 
 def class_weights(rows) -> torch.Tensor:
@@ -69,6 +69,7 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--run", default="dinoseg")
+    ap.add_argument("--split-key", default="split_a", choices=["split_a", "split_c"])
     a = ap.parse_args()
 
     cfg = {"encoder": "vit_base_patch16_dinov3.lvd1689m", "epochs": 120,
@@ -84,8 +85,8 @@ def main() -> int:
     np.random.seed(a.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    tr_rows = load_rows(a.datasets, "train")
-    va_rows = load_rows(a.datasets, "val")
+    tr_rows = load_rows(a.datasets, "train", a.split_key)
+    va_rows = load_rows(a.datasets, "val", a.split_key)
     tr_ds = TileDataset(a.datasets, tr_rows, aug=True, seed=a.seed)
     va_ds = TileDataset(a.datasets, va_rows)
     tr_dl = DataLoader(tr_ds, batch_size=cfg["batch"], shuffle=True,
