@@ -205,3 +205,26 @@ datasets/, runs/  → .gitignore（大文件外置）
   （`contact_sheet.png`、`contact_bright.png`，已被 gitignore）；
 - 确认 DINOv3 公开族系与 HF 检查点命名（含卫星预训练 sat493m），timm≥1.0.20 已支持权重映射；
 - 本方案文档。
+
+---
+
+## 10. 实施进展
+
+- **M0**：数据审计（§1 全 8 条）+ 本方案文档。
+- **M1（已实现，仓库 9 组样本验收通过）**：
+  - `tools/ds_common.py`：类别表、魔数识别、LabelMe 解析、manifest 读写；
+  - `tools/ingest.py`：入库 9 组 / 4 村，0 告警，TIFF→真 PNG，内嵌图兜底；
+  - `tools/build_masks.py`：9 张掩膜，取值集合 {3,4,5,7,255} ⊆ {0..9}∪{255}，回写像素统计；
+  - `tools/split.py`：划分 A/B 写 `splits.csv`（小样本分层告警属预期，全量数据正常）；
+  - `tools/analyze.py`：gt/pred 双模式逐图占比 + 村级加权汇总；两模式互查 max|Δp| ≤ 0.011
+    （差异仅来自分母口径：多边形并集 vs padding 规则）。
+- **本地全量运行**（仓库根目录，依赖仅 Pillow+numpy）：
+
+  ```bash
+  python tools/ingest.py train/ --out datasets/
+  python tools/build_masks.py datasets/
+  python tools/split.py datasets/
+  python tools/analyze.py datasets/ --mode gt
+  # 模型训完后对全部图片出占比:
+  python tools/analyze.py datasets/ --mode pred --pred-dir runs/pred_masks/
+  ```
