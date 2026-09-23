@@ -1,0 +1,10 @@
+# 大文件与运行产物不进 git
+.scratch/
+datasets/
+runs/
+outputs/
+*.ckpt
+*.pth
+*.pt
+__pycache__/
+*.pyc
