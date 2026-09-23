@@ -4,7 +4,8 @@
 > 目标：在泉州沿海 12 个传统村落无人机数据集（10 类）上实现并验证 DINO-Seg
 > （冻结 DINOv3 编码器 + 多尺度重采样块 + 融合上采样解码器 + 轻量分割头），
 > 复现/对标论文指标 **Precision 0.8363 / Recall 0.8702 / F1 0.8522 / IoU 0.7445**，
-> 并输出"建筑侵占 / 绿地失衡 / 水体分布"的村落级保护评估分析。
+> 并输出**每张图片 10 类要素（bare soil … water）的占比统计**（可聚合到村），
+> 作为传统村落保护评估的量化依据。
 
 ---
 
@@ -15,7 +16,7 @@
 | M1 数据工程 | 格式修复、LabelMe→栅格掩膜、ignore 掩膜、划分、体检报告 | `datasets/masks/`、`manifest.csv`、`docs/DATA_AUDIT.md` | 1–2 天 |
 | M2 基线 | UNet / DeepLabV3+ / SegFormer-B2 同口径训练评估 | 基线指标表 v1 | 2–4 天 |
 | M3 DINO-Seg | 冻结 DINOv3-ViT-B/16（卫星预训练优先）+ 重采样块 + 融合解码器 + 头 | 主模型 ckpt、指标表（对标论文） | 3–5 天 |
-| M4 消融与分析 | 编码器/解码器消融；村落级景观分析 | 消融表、村庄 CSV、叠加可视化 | 2–3 天 |
+| M4 消融与分析 | 编码器/解码器消融；逐图 10 类要素占比统计 | 消融表、逐图占比 CSV、占比条形图 | 2–3 天 |
 | M5 收尾 | README、复现脚本、报告 | 发布包 | 1–2 天 |
 
 硬件口径：单卡 24 GB（fp16/AMP）可跑 ViT-B 冻结方案；训练在用户机器/云执行，**本沙箱无 GPU 且未装 torch，仅做数据核验与文档**（见 §10）。
@@ -69,7 +70,7 @@ datasets/masks/{village}_{tile}.png (0..9, 255=ignore)
   │  tools/split.py         —— 划分 A: 按瓦片分层 70/15/15(对标论文口径)
   │                           划分 B: 按村庄留出 9训/1验/2试(泛化口径)
   ▼
-训练 ──► 评估(P/R/F1/mIoU, 宏+微) ──► tools/analyze.py 村落级景观分析 ──► 报告/可视化
+训练 ──► 评估(P/R/F1/mIoU, 宏+微) ──► tools/analyze.py 逐图10类占比统计 ──► CSV/图表
 ```
 
 全部大文件（images/masks/runs/ckpt）**不进 git**，用 `.gitignore` 排除；
@@ -150,17 +151,22 @@ datasets/masks/{village}_{tile}.png (0..9, 255=ignore)
 
 ---
 
-## 6. 村落景观分析（M4，对应论文"保护评估"论述）
+## 6. 逐图要素占比统计（M4，核心交付）
 
-`tools/analyze.py` 以村为单位输出 CSV + 叠加图：
+`tools/analyze.py` 对**每张图片**计算 10 类要素占比，一张图一行：
 
-1. **面积结构**：10 类像素占比（若有 GSD 换算 m²；无 GSD 则报占比并注明）；
-2. **建筑侵占**：`new_building` 占比、new/old 面积比；用距离变换计算 new-building 到
-   old-building 聚落的最近距离直方图（< 阈值 d₀ 视为侵入历史风貌区）；
-3. **绿地失衡**：绿地（tree + mountain forest + cultivated land）/ 建设用地（new+old+road+hsr）比值，
-   与经验阈值对比分档（失衡/临界/均衡）；
-4. **水体分布**：water 占比、连通域个数与最大斑块比（破碎度），沿村边界带状统计。
-5. 每村一页可视化：原图 | 预测 | 差异（GT vs Pred）三联图，供论文图件。
+1. **掩膜来源两种模式**：`gt`（直接用标注掩膜，给数据集做要素画像）与
+   `pred`（模型推理输出，对全部 1175 张出占比）；
+2. **分母 = 有效像素**（剔除 ignore=255 的近黑 padding；实测单张 padding 最高约 90%，§1.6，
+   用全图 512² 当分母会把占比严重稀释）。同时输出 `valid_pct` 列记录有效区占全图比例；
+3. **CSV 列**：`village, tile, source, valid_pct, p_bare_soil, p_cultivated_land,
+   p_hsr_highway, p_mountain_forest, p_naked_mountain, p_new_building,
+   p_old_building, p_road, p_tree, p_water`（10 个占比在有效区内和为 1）；
+4. **组合占比**（配置里定义映射，随表附列）：建筑 = new building + old building；
+   植被 = tree + mountain forest；水体 = water；交通 = road + hsr & highway；
+   裸露地 = bare soil + naked mountain；耕地 = cultivated land；
+5. **聚合（可选）**：按村 / 全数据集以有效像素加权平均得汇总表；
+   逐图占比堆叠条形图、村级对比图，供论文图件。
 
 ---
 
@@ -187,8 +193,8 @@ datasets/, runs/  → .gitignore（大文件外置）
 2. **论文划分与口径**：复现精确数字需要同 train/val/test 划分及宏/微口径；若不可得，
    以本文 §3.3 划分 A 为准并显著注明（数字不具逐位可比性）。
 3. **算力**：本沙箱无 GPU/torch；训练需在用户侧执行，M2/M3 估时按单卡 24GB 计。
-4. 村庄名后缀 `14` 是否为影像年份（2014）？若存在多期影像，§6 可扩展为时序侵占分析。
-5. GSD / 正射分辨率是否可得（决定面积统计用 m² 还是像素占比）。
+4. 村庄名后缀 `14` 是否为影像年份（2014）？若存在多期影像，§6 的逐图占比可直接扩展成时序对比。
+5. GSD / 正射分辨率为可选项：默认交付就是像素占比；若提供 GSD，CSV 可加挂 m² 面积列。
 6. DINOv3 许可：DINOv3 License 允许商用（含署名条款），学术使用无碍；交付物中附许可证说明。
 
 ---
