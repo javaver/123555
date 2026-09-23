@@ -228,3 +228,13 @@ datasets/, runs/  → .gitignore（大文件外置）
   # 模型训完后对全部图片出占比:
   python tools/analyze.py datasets/ --mode pred --pred-dir runs/pred_masks/
   ```
+- **M2/M3（已实现，CPU 冒烟验证通过）**：
+  - `src/dinoseg/model.py`：FrozenDINOv3Encoder（timm `vit_base_patch16_dinov3.lvd1689m`，
+    最后 4 block patch tokens，剔 CLS+registers）+ ResampleBlock（亚像素上采样）
+    + FusionUpsampleDecoder + 轻量头；可训练 7.56M / 总 93.2M；
+  - `src/dinoseg/{dataset,losses,metrics}.py`、`scripts/{train,eval,infer}.py`、
+    `configs/dinoseg_vitb16_512.yaml`；
+  - 冒烟（随机初始化、9 样本、CPU）：train 1 epoch、eval 出论文口径表、
+    infer 9 张掩膜、analyze pred 模式全通；
+  - 预训练权重下载未在沙箱验证（HF 被墙）：模型 ID 已被 timm 识别（进入 dinov3 factory），
+    用户侧若下载受阻设 `HF_ENDPOINT=https://hf-mirror.com`。

@@ -1,0 +1,8 @@
+# DINO-Seg 主配置 (512 瓦片, 10 类)
+encoder: vit_base_patch16_dinov3.lvd1689m   # 消融: vit_large_patch16_dinov3.sat493m
+num_classes: 10
+epochs: 120
+batch: 8
+lr: 8.0e-4
+# 类权重由 train.py 从训练集像素频率自动计算 (median/freq, 截断 [1,20]);
+# 全量实测参考: old building 8.44 / naked mountain 2.60 / hsr 2.04 / bare soil 1.58, 其余 1.0

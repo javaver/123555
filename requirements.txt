@@ -2,6 +2,7 @@
 Pillow>=9.0
 numpy>=1.24
 
-# M2/M3 训练阶段启用:
-# torch>=2.1
-# timm>=1.0.20   # 含 DINOv3 权重映射 (lvd1689m / sat493m)
+# M2/M3 训练阶段
+torch>=2.1
+timm>=1.0.20        # 含 DINOv3 权重映射 (lvd1689m / sat493m)
+PyYAML>=6.0
