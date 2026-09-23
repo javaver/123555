@@ -4,8 +4,9 @@
 用法:
     python tools/split.py datasets/ [--seed 42] [--ratios 0.7 0.15 0.15]
 
-划分 A (对标论文口径): 按瓦片分层随机——分层键 = 该图出现的类别集合,
-  层内 shuffle 后按比例切; 小层(<=2)尽量保证 test 有样本, 其余进 train 并告警。
+划分 A (对标论文口径): 按瓦片分层随机——分层键 = 该图的主导类别
+  (像素数最多的类, 约 10 个层, 避免"类别集合签名"碎片化),
+  层内 shuffle 后按 70/15/15 切; 并打印各折的类别像素占比平衡报告。
 划分 B (泛化口径): 村庄级留出——shuffle 村庄, 前 2 个做 test, 第 3 个做 val,
   其余 train; 村庄数不足时降级并告警。
 类别权重等统计只允许用 split_a==train 的样本(下游自行过滤)。
@@ -20,15 +21,23 @@ from pathlib import Path
 from ds_common import CLASS_NAMES, read_manifest, slug
 
 
+def class_px(r: dict) -> dict:
+    return {n: int(r[f"px_{slug(n)}"]) for n in CLASS_NAMES}
+
+
+def dominant_class(r: dict) -> str:
+    px = class_px(r)
+    return max(px, key=px.get) if sum(px.values()) else "__empty__"
+
+
 def split_a(rows: list[dict], ratios: list[float], rng: random.Random) -> dict:
     tr, va, te = ratios
     out = {}
-    strata: dict[tuple, list[dict]] = {}
+    strata: dict[str, list[dict]] = {}
     for r in rows:
-        sig = tuple(n for n in CLASS_NAMES if int(r[f"px_{slug(n)}"]) > 0)
-        strata.setdefault(sig or ("__empty__",), []).append(r)
+        strata.setdefault(dominant_class(r), []).append(r)
 
-    for sig, members in strata.items():
+    for dom, members in sorted(strata.items()):
         rng.shuffle(members)
         n = len(members)
         if n >= 3:
@@ -39,10 +48,10 @@ def split_a(rows: list[dict], ratios: list[float], rng: random.Random) -> dict:
             train = members[n_te + n_va:]
         elif n == 2:
             test, val, train = members[:1], [], members[1:]
-            print(f"  [warn] 层 {sig} 仅 2 样本: 1 train / 1 test, 无 val")
+            print(f"  [warn] 层 {dom} 仅 2 样本: 1 train / 1 test, 无 val")
         else:
             test, val, train = [], [], members
-            print(f"  [warn] 层 {sig} 仅 1 样本: 全部进 train")
+            print(f"  [warn] 层 {dom} 仅 1 样本: 全部进 train")
         for r in train:
             out[(r["village"], r["tile"])] = "train"
         for r in val:
@@ -68,6 +77,28 @@ def split_b(rows: list[dict], rng: random.Random) -> dict:
         v = r["village"]
         out[(v, r["tile"])] = ("test" if v in test_v else "val" if v in val_v else "train")
     return out
+
+
+def report_balance(rows: list[dict], assign: dict, name: str) -> None:
+    tot = {n: 0 for n in CLASS_NAMES}
+    per = {s: {n: 0 for n in CLASS_NAMES} for s in ("train", "val", "test")}
+    for r in rows:
+        s = assign[(r["village"], r["tile"])]
+        for n, v in class_px(r).items():
+            tot[n] += v
+            per[s][n] += v
+    grand = max(sum(tot.values()), 1)
+    print(f"划分 {name} 各类像素占比 (%):")
+    print(f"    {'class':32s} {'all':>6s} {'train':>6s} {'val':>6s} {'test':>6s}")
+    for n in CLASS_NAMES:
+        shares = {s: 100 * per[s][n] / max(sum(per[s].values()), 1)
+                  for s in ("train", "val", "test")}
+        flag = "  <-- 某折缺失" if any(per[s][n] == 0 for s in per) else ""
+        print(f"    {n:32s} {100 * tot[n] / grand:6.2f} "
+              f"{shares['train']:6.2f} {shares['val']:6.2f} {shares['test']:6.2f}{flag}")
+    missing = [n for n in CLASS_NAMES if any(per[s][n] == 0 for s in per)]
+    if missing:
+        print(f"  [warn] 划分 {name} 有折缺类: {missing}")
 
 
 def main() -> int:
@@ -102,15 +133,7 @@ def main() -> int:
         for v in m.values():
             cnt[v] += 1
         print(f"划分 {name}: train={cnt['train']} val={cnt['val']} test={cnt['test']}")
-    # 划分 A test 的类别覆盖检查
-    test_keys = {k for k, v in sa.items() if v == "test"}
-    covered = set()
-    for r in rows:
-        if (r["village"], r["tile"]) in test_keys:
-            covered |= {n for n in CLASS_NAMES if int(r[f"px_{slug(n)}"]) > 0}
-    miss = set(CLASS_NAMES) - covered
-    if miss:
-        print(f"  [warn] 划分 A test 未覆盖类别: {sorted(miss)} (稀有类样本量不足时属预期)")
+    report_balance(rows, sa, "A")
     print(f"splits -> {out}")
     return 0
 
