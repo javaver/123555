@@ -17,6 +17,12 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
+def normalize_array(img: Image.Image) -> torch.Tensor:
+    a = np.asarray(img).astype(np.float32) / 255.0
+    a = (a - np.array(IMAGENET_MEAN, np.float32)) / np.array(IMAGENET_STD, np.float32)
+    return torch.from_numpy(a.transpose(2, 0, 1)).float()
+
+
 class TileDataset(Dataset):
     def __init__(self, root, rows, aug: bool = False,
                  mean=IMAGENET_MEAN, std=IMAGENET_STD, seed: int = 42):
@@ -57,3 +63,45 @@ class TileDataset(Dataset):
         a = (a - self.mean) / self.std
         return (torch.from_numpy(a.transpose(2, 0, 1)).float(),
                 torch.from_numpy(m).long())
+
+
+class FeatureDataset(Dataset):
+    """读预计算的编码器特征 (cache_features.py 产出) + 掩膜。
+
+    增强只做几何类 (翻转/90°旋转), 对特征图与掩膜同步施加;
+    光度抖动仅在 TileDataset(端到端模式) 可用。
+    """
+
+    def __init__(self, root, rows, feats_dir, aug: bool = False, seed: int = 42):
+        self.root = root
+        self.rows = rows
+        self.feats_dir = feats_dir
+        self.aug = aug
+        self.rng = random.Random(seed)
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, i):
+        r = self.rows[i]
+        feats = []
+        for f in torch.load(self.feats_dir / f"{r['village']}__{r['tile']}.pt",
+                            map_location="cpu", weights_only=True):
+            if f.dim() == 4:  # 兼容早期带 batch 维的缓存
+                f = f[0]
+            feats.append(f.float())
+        m = np.asarray(Image.open(self.root / r["mask_rel"]), dtype=np.int64)
+        if self.aug:
+            m = torch.from_numpy(m)
+            if self.rng.random() < 0.5:
+                feats = [f.flip(-1) for f in feats]
+                m = m.flip(1)
+            if self.rng.random() < 0.5:
+                feats = [f.flip(-2) for f in feats]
+                m = m.flip(0)
+            k = self.rng.choice([0, 1, 2, 3])
+            if k:
+                feats = [torch.rot90(f, k, (-2, -1)) for f in feats]
+                m = torch.rot90(m, k, (-2, -1))
+            m = m.numpy()
+        return feats, torch.from_numpy(np.ascontiguousarray(m)).long()

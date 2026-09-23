@@ -105,11 +105,13 @@ class DINOvSeg(nn.Module):
             nn.BatchNorm2d(128), nn.ReLU(inplace=True),
             nn.Conv2d(128, num_classes, 1))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h, w = x.shape[-2:]
-        pyr = [blk(f) for blk, f in zip(self.resample, self.encoder(x))]
+    def forward_feats(self, feats: list[torch.Tensor], size: tuple[int, int]) -> torch.Tensor:
+        pyr = [blk(f) for blk, f in zip(self.resample, feats)]
         x = self.head(self.decoder(pyr))
-        return F.interpolate(x, size=(h, w), mode="bilinear", align_corners=False)
+        return F.interpolate(x, size=size, mode="bilinear", align_corners=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.forward_feats(self.encoder(x), x.shape[-2:])
 
     def trainable_parameters(self):
         return (p for p in self.parameters() if p.requires_grad)

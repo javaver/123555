@@ -243,3 +243,6 @@ datasets/, runs/  → .gitignore（大文件外置）
   <512=重叠切分需警惕真重复泄漏）与**划分 C 空间块**（1024² 成块整块进折，
   splits.csv 增 split_c 列；train/eval/infer 增 `--split-key split_c` 可切换）。
   论文三档并报：A 对标论文、C 空间去偏、B 整村留出。
+- **CPU 可行化（特征缓存）**：`scripts/cache_features.py` 一次性存冻结编码器的 4 级
+  fp16 特征 (~6.3MB/张, 全量约 7.4GB)；`train.py --cache-dir` 后每 epoch 只训解码器
+  (7.56M)，CPU 分钟级/epoch。缓存模式增强仅几何类(翻转/旋转)。

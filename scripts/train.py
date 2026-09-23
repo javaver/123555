@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader
 
 from ds_common import CLASS_NAMES, read_manifest, slug
 from dinoseg import ConfusionMeter, DINOvSeg, SegLoss
-from dinoseg.dataset import TileDataset
+from dinoseg.dataset import FeatureDataset, TileDataset
 
 
 def load_rows(datasets: Path, want: str, key: str = "split_a"):
@@ -52,8 +52,10 @@ def evaluate(model, loader, device, num_classes) -> dict:
     model.eval()
     meter = ConfusionMeter(num_classes)
     for x, y in loader:
-        x = x.to(device)
-        logits = model(x)
+        if isinstance(x, list):
+            logits = model.forward_feats([t.to(device) for t in x], y.shape[-2:])
+        else:
+            logits = model(x.to(device))
         meter.update(logits.argmax(1).cpu().numpy(), y.numpy())
     return meter.result()
 
@@ -70,6 +72,8 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--run", default="dinoseg")
     ap.add_argument("--split-key", default="split_a", choices=["split_a", "split_c"])
+    ap.add_argument("--cache-dir", type=Path, default=None,
+                    help="预计算特征目录 (cache_features.py 产出); 设置后训练不跑编码器")
     a = ap.parse_args()
 
     cfg = {"encoder": "vit_base_patch16_dinov3.lvd1689m", "epochs": 120,
@@ -87,8 +91,12 @@ def main() -> int:
 
     tr_rows = load_rows(a.datasets, "train", a.split_key)
     va_rows = load_rows(a.datasets, "val", a.split_key)
-    tr_ds = TileDataset(a.datasets, tr_rows, aug=True, seed=a.seed)
-    va_ds = TileDataset(a.datasets, va_rows)
+    if a.cache_dir:
+        tr_ds = FeatureDataset(a.datasets, tr_rows, a.cache_dir, aug=True, seed=a.seed)
+        va_ds = FeatureDataset(a.datasets, va_rows, a.cache_dir)
+    else:
+        tr_ds = TileDataset(a.datasets, tr_rows, aug=True, seed=a.seed)
+        va_ds = TileDataset(a.datasets, va_rows)
     tr_dl = DataLoader(tr_ds, batch_size=cfg["batch"], shuffle=True,
                        num_workers=0, drop_last=False)
     va_dl = DataLoader(va_ds, batch_size=2, num_workers=0)
@@ -119,10 +127,16 @@ def main() -> int:
         losses = []
         t0 = time.time()
         for x, y in tr_dl:
-            x, y = x.to(device), y.to(device)
+            y = y.to(device)
+            if isinstance(x, list):
+                x = [t.to(device) for t in x]
+                fwd = lambda: model.forward_feats(x, y.shape[-2:])
+            else:
+                x = x.to(device)
+                fwd = lambda: model(x)
             opt.zero_grad()
             with torch.amp.autocast("cuda", enabled=use_amp):
-                loss = crit(model(x), y)
+                loss = crit(fwd(), y)
             scaler.scale(loss).backward()
             scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_(model.trainable_parameters(), 1.0)
