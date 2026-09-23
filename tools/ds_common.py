@@ -24,6 +24,19 @@ CLASS_NAMES = [  # 顺序即 mask 像素值 0..9
 CLASS_TO_ID = {n: i for i, n in enumerate(CLASS_NAMES)}
 IGNORE = 255
 
+# 全量数据里实测出现的标注拼写变体 -> 标准类名 (不改动原始 JSON, 只在入掩膜时归一)
+LABEL_ALIASES = {
+    "naked  mountain": "naked mountain",   # 双空格
+    "mountan forest": "mountain forest",   # 拼写错误
+}
+
+
+def normalize_label(raw: str) -> str:
+    t = " ".join((raw or "").split())
+    if t in CLASS_TO_ID:
+        return t
+    return LABEL_ALIASES.get(t, t)
+
 
 def slug(name: str) -> str:
     return name.replace(" ", "_")

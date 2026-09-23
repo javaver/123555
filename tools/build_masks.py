@@ -19,15 +19,16 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from ds_common import (CLASS_NAMES, CLASS_TO_ID, IGNORE, polygon_area,
-                       read_labelme, read_manifest, slug, write_manifest)
+from ds_common import (CLASS_NAMES, CLASS_TO_ID, IGNORE, normalize_label,
+                       polygon_area, read_labelme, read_manifest, slug,
+                       write_manifest)
 
 
 def rasterize(doc: dict, w: int, h: int) -> tuple[np.ndarray, list[str]]:
     warns: list[str] = []
     shapes = []
     for s in doc.get("shapes", []):
-        lab = s.get("label")
+        lab = normalize_label(s.get("label"))
         if lab not in CLASS_TO_ID:
             warns.append(f"类别外标签跳过: {lab!r}")
             continue
