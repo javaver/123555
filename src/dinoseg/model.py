@@ -56,7 +56,8 @@ class FrozenDINOv3Encoder(nn.Module):
         with torch.no_grad(), torch.amp.autocast("cuda"):
             self.enc(x)
         b = x.shape[0]
-        h = w = x.shape[-1] // self.patch
+        h = x.shape[-2] // self.patch
+        w = x.shape[-1] // self.patch
         outs = []
         for f in self._feats:
             t = f[:, self.n_prefix:, :]
