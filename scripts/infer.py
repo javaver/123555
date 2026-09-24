@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
 
 from ds_common import CLASS_NAMES, CLASS_TO_ID, IMG_EXTS, read_manifest, slug
@@ -57,7 +58,14 @@ def main() -> int:
         for i, p in enumerate(files):
             img = Image.open(p).convert("RGB")
             x = normalize_array(img)[None].to(device)
+            h0, w0 = x.shape[-2:]
+            if h0 * w0 > 2048 * 2048:
+                print(f"  [warn] {p.name} 尺寸较大({h0}x{w0}), 若显存不足请切块后推理")
+            ph, pw = (16 - h0 % 16) % 16, (16 - w0 % 16) % 16
+            if ph or pw:  # 任意尺寸新图: reflect 填充到 16 的倍数, 推完裁回
+                x = F.pad(x, (0, pw, 0, ph), mode="reflect")
             pred = model(x).argmax(1)[0].cpu().numpy().astype(np.uint8)
+            pred = pred[:h0, :w0]
             arr = np.asarray(img)
             valid = arr.max(axis=2) > 5
             pred[~valid] = 255
