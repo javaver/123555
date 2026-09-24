@@ -29,11 +29,18 @@ class ConfusionMeter:
         present = mat.sum(axis=1) > 0
         macro = lambda a: float(a[present].mean()) if present.any() else 0.0
         tot = mat.sum()
+        sum_tp = float(tp.sum())
+        union = float((mat.sum(axis=1) + mat.sum(axis=0) - tp).sum())
+        pred_tot = float(pred_n.sum())
+        gt_tot = float(gt_n.sum())
+        mi_p = sum_tp / pred_tot if pred_tot else 0.0
+        mi_r = sum_tp / gt_tot if gt_tot else 0.0
         return {
             "precision": prec, "recall": rec, "f1": f1, "iou": iou,
             "mPrecision": macro(prec), "mRecall": macro(rec),
             "mF1": macro(f1), "mIoU": macro(iou),
             "pixel_acc": float(tp.sum() / tot) if tot else 0.0,
-            "micro_precision": float(tp.sum() / pred_n.sum()) if tot else 0.0,
-            "micro_recall": float(tp.sum() / gt_n.sum()) if tot else 0.0,
+            "micro_precision": mi_p, "micro_recall": mi_r,
+            "micro_f1": 2 * mi_p * mi_r / (mi_p + mi_r) if mi_p + mi_r else 0.0,
+            "IoU_micro": sum_tp / union if union else 0.0,
         }

@@ -55,6 +55,8 @@ def main() -> int:
               f"{r['f1'][i]:6.4f} {r['iou'][i]:6.4f}")
     print(f"{'MACRO':32s} {r['mPrecision']:6.4f} {r['mRecall']:6.4f} "
           f"{r['mF1']:6.4f} {r['mIoU']:6.4f}   pixel_acc={r['pixel_acc']:.4f}")
+    print(f"{'MICRO':32s} {r['micro_precision']:6.4f} {r['micro_recall']:6.4f} "
+          f"{r['micro_f1']:6.4f} {r['IoU_micro']:6.4f}   (论文若为微平均口径, 看这行)")
     out = a.out or (a.ckpt.parent / f"metrics_{a.split}.csv")
     with open(out, "w", encoding="utf-8") as fh:
         fh.write("class,precision,recall,f1,iou\n")
