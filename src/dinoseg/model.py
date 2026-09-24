@@ -51,7 +51,9 @@ class FrozenDINOv3Encoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
         self._feats = []
-        with torch.no_grad():
+        # 编码器前向用 fp16 加速(无 backward, 不会溢出); 解码器/反向全程 fp32,
+        # 规避 fp16 反向经 ~1e3 量级特征时 GradScaler 梯度溢出 -> NaN
+        with torch.no_grad(), torch.amp.autocast("cuda"):
             self.enc(x)
         b = x.shape[0]
         h = w = x.shape[-1] // self.patch
@@ -116,7 +118,9 @@ class DINOvSeg(nn.Module):
         return F.interpolate(x, size=size, mode="bilinear", align_corners=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.forward_feats(self.encoder(x), x.shape[-2:])
+        feats = [f.float() for f in self.encoder(x)]  # fp16 特征转 fp32 再进解码器
+        with torch.amp.autocast("cuda", enabled=False):
+            return self.forward_feats(feats, x.shape[-2:])
 
     def trainable_parameters(self):
         return (p for p in self.parameters() if p.requires_grad)
