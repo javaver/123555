@@ -246,3 +246,11 @@ datasets/, runs/  → .gitignore（大文件外置）
 - **CPU 可行化（特征缓存）**：`scripts/cache_features.py` 一次性存冻结编码器的 4 级
   fp16 特征 (~6.3MB/张, 全量约 7.4GB)；`train.py --cache-dir` 后每 epoch 只训解码器
   (7.56M)，CPU 分钟级/epoch。缓存模式增强仅几何类(翻转/旋转)。
+- **M4（全量训练与评测闭环，云端 2080Ti 已完成）**：
+  - 混合精度 NaN 根因修复：ViT 高层特征模长达 1300，AMP GradScaler (65536) 在反向时溢出 inf；修复为骨干 fp16 前向，解码器与梯度强制 fp32；
+  - 120 轮全量训练完成：最佳 val mIoU 0.5838 (ep38)；
+  - 测试集评测：MACRO P 0.7149 / R 0.7417 / F1 0.7255 / mIoU 0.5940；MICRO IoU 0.6677 / Acc 0.8007；
+  - 1175 张切片全量推理与 10 类占比导出：`datasets/analysis/proportions_pred.csv` 与 `village_summary_pred.csv`；
+  - 标注 GT vs 预测 Pred 逐图 10 类绝对偏差均值仅 **0.0249**（2.49%），老建筑占比偏差仅 0.65%，占比统计业务交付高度可信；
+  - 外部非方形任意尺寸大图推理（`--image-dir`）打通，已成功处理 2736x2347 大图。
+
