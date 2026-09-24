@@ -31,12 +31,14 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=Path("runs/feats"))
     ap.add_argument("--encoder", default="vit_base_patch16_dinov3.lvd1689m")
     ap.add_argument("--pretrained", type=int, default=1)
+    ap.add_argument("--enc-ckpt", default=None)
     a = ap.parse_args()
 
     from ds_common import read_manifest
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device={device} (缓存只跑一次, CPU 亦可)")
-    model = DINOvSeg(a.encoder, pretrained=bool(a.pretrained)).to(device).eval()
+    model = DINOvSeg(a.encoder, pretrained=bool(a.pretrained),
+                     checkpoint_path=a.enc_ckpt).to(device).eval()
 
     rows = read_manifest(a.datasets / "manifest.csv")
     a.out.mkdir(parents=True, exist_ok=True)

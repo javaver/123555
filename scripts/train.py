@@ -72,6 +72,7 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--run", default="dinoseg")
     ap.add_argument("--split-key", default="split_a", choices=["split_a", "split_c"])
+    ap.add_argument("--enc-ckpt", default=None, help="本地编码器权重 model.safetensors (HF 不通时用)")
     ap.add_argument("--cache-dir", type=Path, default=None,
                     help="预计算特征目录 (cache_features.py 产出); 设置后训练不跑编码器")
     a = ap.parse_args()
@@ -102,7 +103,8 @@ def main() -> int:
     va_dl = DataLoader(va_ds, batch_size=2, num_workers=0)
 
     model = DINOvSeg(cfg["encoder"], pretrained=bool(a.pretrained),
-                     num_classes=cfg["num_classes"]).to(device)
+                     num_classes=cfg["num_classes"],
+                     checkpoint_path=a.enc_ckpt).to(device)
     n_train = sum(p.numel() for p in model.trainable_parameters())
     n_all = sum(p.numel() for p in model.parameters())
     print(f"参数: 可训练 {n_train / 1e6:.2f}M / 总 {n_all / 1e6:.2f}M (编码器冻结)")

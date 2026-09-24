@@ -20,14 +20,18 @@ DEFAULT_ENCODER = "vit_base_patch16_dinov3.lvd1689m"
 class FrozenDINOv3Encoder(nn.Module):
     """冻结的 DINOv3 ViT, 返回最后 4 个 block 的 2D patch 特征。"""
 
-    def __init__(self, model_id: str = DEFAULT_ENCODER, pretrained: bool = True):
+    def __init__(self, model_id: str = DEFAULT_ENCODER, pretrained: bool = True,
+                 checkpoint_path: str | None = None):
         super().__init__()
         try:
-            self.enc = timm.create_model(model_id, pretrained=pretrained, num_classes=0)
+            self.enc = timm.create_model(
+                model_id, pretrained=pretrained and not checkpoint_path,
+                num_classes=0, checkpoint_path=checkpoint_path)
         except Exception as e:
             raise RuntimeError(
                 f"加载编码器 {model_id} 失败: {e}\n"
                 "若 HuggingFace 下载受阻, 可设 HF_ENDPOINT=https://hf-mirror.com 后重试; "
+                "或用 --enc-ckpt 指向本地 model.safetensors; "
                 "或先 --pretrained 0 验证管线再开预训练。") from e
         self.enc.eval()
         for p in self.enc.parameters():
@@ -93,9 +97,10 @@ class FusionUpsampleDecoder(nn.Module):
 
 class DINOvSeg(nn.Module):
     def __init__(self, encoder_id: str = DEFAULT_ENCODER, pretrained: bool = True,
-                 num_classes: int = 10, chans=(256, 192, 128, 96)):
+                 num_classes: int = 10, chans=(256, 192, 128, 96),
+                 checkpoint_path: str | None = None):
         super().__init__()
-        self.encoder = FrozenDINOv3Encoder(encoder_id, pretrained)
+        self.encoder = FrozenDINOv3Encoder(encoder_id, pretrained, checkpoint_path)
         dim = self.encoder.feat_dim
         self.resample = nn.ModuleList(
             ResampleBlock(dim, c, f) for c, f in zip(chans, (1, 2, 4, 8)))
