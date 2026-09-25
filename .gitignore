@@ -1,0 +1,17 @@
+# 大文件与运行产物不进 git
+.scratch/
+datasets/
+!datasets/analysis/
+!datasets/analysis/*.csv
+
+runs/
+!runs/dinoseg/metrics_test.csv
+!runs/pred_new/*.csv
+
+outputs/
+*.ckpt
+*.pth
+*.pt
+__pycache__/
+*.pyc
+
