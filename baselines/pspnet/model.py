@@ -20,7 +20,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import timm
+from baselines.timm_utils import create_timm_encoder
 
 
 class PyramidPoolingModule(nn.Module):
@@ -77,9 +77,8 @@ class PSPNet(nn.Module):
     ):
         super().__init__()
         self.num_classes = num_classes
-        self.encoder = timm.create_model(
+        self.encoder = create_timm_encoder(
             backbone,
-            features_only=True,
             pretrained=pretrained,
             in_chans=in_channels,
             output_stride=output_stride,
