@@ -15,14 +15,13 @@ Architecture (faithful to the paper):
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import List, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from baselines.segformer.mit import MIT_CONFIGS, mit_backbone
+from baselines.segformer.mit import MIT_CONFIGS, load_mit_pretrained, mit_backbone
 
 
 class SegFormerMLPHead(nn.Module):
@@ -77,9 +76,12 @@ class SegFormer(nn.Module):
             features_only=True)`` for compatibility with CNN/other backbones
             (e.g. legacy ``pvt_v2_b0`` checkpoints).
         pretrained: load ImageNet weights for timm backbones (MiT 的
-            ImageNet 权重请用 ``pretrained_from`` 传入本地官方 mit_bX.pth).
-        pretrained_from: local checkpoint path with official NVlabs
-            ``mit_bX.pth`` weights to initialise the MiT encoder.
+            ImageNet 权重请用 ``pretrained_from`` 传入本地权重文件).
+        pretrained_from: local ImageNet checkpoint path to initialise the MiT
+            encoder — 支持 NVlabs 官方 ``mit_bX.pth`` 直载, 以及 HF
+            ``nvidia/mit-bX`` 的 ``pytorch_model.bin`` / ``model.safetensors``
+            (transformers 新旧两代键名布局自动转换), 详见
+            ``baselines/segformer/mit.py::load_mit_pretrained``.
     """
 
     def __init__(
@@ -100,14 +102,9 @@ class SegFormer(nn.Module):
             self.encoder = mit_backbone(key, in_chans=in_channels)
             feat_info = self.encoder.channels()
             if pretrained_from is not None:
-                state = torch.load(Path(pretrained_from), map_location="cpu")
-                if isinstance(state, dict) and "state_dict" in state:
-                    state = state["state_dict"]
-                missing, unexpected = self.encoder.load_state_dict(state, strict=False)
-                # 官方 ckpt 只含编码器权重, missing 属预期; 意外键则报错
-                unexpected = [k for k in unexpected if not k.startswith(("head", "decode_head", "fc", "classifier"))]
-                if unexpected:
-                    raise RuntimeError(f"Unexpected keys in MiT checkpoint: {unexpected[:5]}")
+                # NVlabs 官方 mit_bX.pth 直载; HF nvidia/mit-bX (新旧键名布局) 自动转换;
+                # 覆盖率 100% 硬校验, 不匹配直接报错
+                load_mit_pretrained(self.encoder, pretrained_from)
         else:
             import timm  # 透传 timm 注册骨干 (兼容 pvt_v2_b0 等旧配置)
 

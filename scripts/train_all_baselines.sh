@@ -21,8 +21,10 @@ if [[ -n "$MIT_CKPT" && -f "$MIT_CKPT" ]]; then
   python -u scripts/train_baseline.py --model segformer --backbone mit_b0 \
     --pretrained-from "$MIT_CKPT" --batch 8 "${COMMON[@]}"
 else
-  echo "WARN: 未提供 mit_b0.pth, SegFormer 将随机初始化。建议:"
-  echo "  curl -L -o /root/weights/mit_b0.pth https://github.com/NVlabs/SegFormer/releases/download/v1.0/mit_b0.pth"
+  echo "WARN: 未提供 mit_b0.pth, SegFormer 将随机初始化。ImageNet 权重下载:"
+  echo "  mkdir -p /root/weights && curl -L -o /root/weights/mit_b0.pth \\"
+  echo "    https://huggingface.co/nvidia/mit-b0/resolve/main/pytorch_model.bin"
+  echo "  (HF 官方 nvidia/mit-b0, 键名自动转换; NVlabs 原版 mit_b0.pth 亦可直载)"
   python -u scripts/train_baseline.py --model segformer --backbone mit_b0 --batch 8 "${COMMON[@]}"
 fi
 

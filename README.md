@@ -209,7 +209,7 @@ bash scripts/train_all_baselines.sh datasets/ /root/weights/mit_b0.pth
 python scripts/compare_all.py --datasets datasets/
 ```
 
-- **SegFormer**：编码器为仓库内 **MiT（mit_b0..mit_b5）**，与 NVlabs 官方 `mit_bX.pth` 键名兼容；`--pretrained` 对 MiT 无效，必须 `--pretrained-from`；
+- **SegFormer**：编码器为仓库内 **MiT（mit_b0..mit_b5）**，`--pretrained-from` 加载 ImageNet 权重——NVlabs 官方 `mit_bX.pth` 直载，或 HF 官方 [`nvidia/mit-b0`](https://huggingface.co/nvidia/mit-b0) 的 `pytorch_model.bin`（transformers 新旧键名布局自动转换，100% 覆盖率硬校验）；`--pretrained` 对 MiT 无效；
 - **MaskFormer**：匈牙利匹配损失（类别 CE，∅ 权重 0.1 + 掩膜 BCE + Dice）；
 - 读取 `runs/<model>/best.pt`；**默认拒绝**缺权重时静默填论文数（避免把 `(paper)` 当成本地结果）；
 - **Table 1** → `runs/comparison_table1.csv`；**Table 2** → `runs/comparison_table2.csv`。

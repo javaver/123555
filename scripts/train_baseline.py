@@ -81,6 +81,15 @@ def evaluate(model, loader, device, num_classes) -> dict:
     return meter.result()
 
 
+def _reseed_aug_rng(worker_id: int) -> None:
+    """num_workers>0 时, 各 worker 继承同一份 TileDataset.rng 状态,
+    会导致跨 worker 的翻转/旋转增强序列完全重复。
+    用 PyTorch 为每个 worker 分配的唯一 seed (逐 epoch 变化) 重播种。"""
+    info = torch.utils.data.get_worker_info()
+    if info is not None and hasattr(info.dataset, "rng"):
+        info.dataset.rng.seed(info.seed)
+
+
 def save_ckpt(path: Path, model, arch: str, arch_kwargs: dict, metrics: dict, meta: dict):
     torch.save(
         {
@@ -144,6 +153,7 @@ def main() -> int:
     tr_dl = DataLoader(
         tr_ds, batch_size=a.batch, shuffle=True, num_workers=a.workers,
         drop_last=True, pin_memory=device.type == "cuda",
+        worker_init_fn=_reseed_aug_rng,
     )
     va_dl = DataLoader(
         va_ds, batch_size=min(4, a.batch), num_workers=a.workers,

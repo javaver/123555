@@ -22,7 +22,9 @@ implemented in-repo instead of relying on ``timm.create_model``.
 """
 from __future__ import annotations
 
-from typing import List
+import re
+from pathlib import Path
+from typing import Dict, List, Tuple
 
 import torch
 import torch.nn as nn
@@ -325,4 +327,189 @@ def mit_backbone(name: str, in_chans: int = 3, drop_path_rate: float = 0.1) -> M
     cfg = MIT_CONFIGS[key]
     return MiTEncoder(
         in_chans=in_chans, drop_path_rate=drop_path_rate, **cfg
+    )
+
+
+# ---------------------------------------------------------------------------
+# ImageNet 预训练权重加载: 支持三种发布格式
+#   1. NVlabs/SegFormer 官方 mit_bX.pth (键名与本地实现一致, 直载);
+#   2. HF transformers 旧版布局 (nvidia/mit-b0 2021 年上传的 pytorch_model.bin:
+#      segformer.patch_embeddings.{s}.* / segformer.block.{s}.{j}.* / attention.self.*);
+#   3. HF transformers 新版布局 (segformer.stages.{s}.blocks.{j}.* / attention.q_proj.*);
+# 加载后做 100% 键覆盖率硬校验, 任何不匹配立即报错, 杜绝静默半加载随机初始化。
+# ---------------------------------------------------------------------------
+
+def _map_hf_block_key(rest: str, out_stage: int, j: int) -> Tuple[str, Tuple[str, str] | None]:
+    """把 HF block 内部子键映射为 NVlabs 子键; k/v 返回待融合标记 (which, 目标键)。"""
+    pre = f"block{out_stage}.{j}."
+    # ---- 注意力投影: 新版 q_proj/k_proj/v_proj/o_proj, 旧版 self.query/self.key/self.value/output.dense ----
+    m = re.match(r"attention\.(?:self\.query|q_proj)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"attn.q.{m[1]}", None
+    m = re.match(r"attention\.(?:self\.key|k_proj)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"attn.kv.{m[1]}", ("k", pre + f"attn.kv.{m[1]}")
+    m = re.match(r"attention\.(?:self\.value|v_proj)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"attn.kv.{m[1]}", ("v", pre + f"attn.kv.{m[1]}")
+    m = re.match(r"attention\.(?:output\.dense|o_proj)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"attn.proj.{m[1]}", None
+    # ---- 空间缩减 SR: 新版 sequence_reduction.sequence_reduction / sequence_reduction.layer_norm,
+    #      旧版 self.sr / self.layer_norm (仅 sr_ratio>1 的阶段存在) ----
+    m = re.match(r"attention\.(?:self\.sr|sequence_reduction\.sequence_reduction)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"attn.sr.{m[1]}", None
+    m = re.match(r"attention\.(?:self\.layer_norm|sequence_reduction\.layer_norm)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"attn.norm.{m[1]}", None
+    # ---- LayerNorm: 新版 layernorm_before/after, 旧版 layer_norm_1/2 ----
+    m = re.match(r"(?:layernorm_before|layer_norm_1)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"norm1.{m[1]}", None
+    m = re.match(r"(?:layernorm_after|layer_norm_2)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"norm2.{m[1]}", None
+    # ---- Mix-FFN: 新版 fc1/fc2, 旧版 dense1/dense2; dwconv 两代同名 ----
+    m = re.match(r"mlp\.(?:fc1|dense1)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"mlp.fc1.{m[1]}", None
+    m = re.match(r"mlp\.(?:fc2|dense2)\.(weight|bias)$", rest)
+    if m:
+        return pre + f"mlp.fc2.{m[1]}", None
+    m = re.match(r"mlp\.dwconv\.dwconv\.(weight|bias)$", rest)
+    if m:
+        return pre + f"mlp.dwconv.dwconv.{m[1]}", None
+    return "", None  # 无法识别 (dropout 等无参模块)
+
+
+def _convert_hf_segformer(sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """HF transformers Segformer state_dict (新旧两代布局) -> NVlabs MiT 键名。
+
+    新版 (transformers 5.x): segformer.stages.{s}.patch_embeddings.* /
+        segformer.stages.{s}.blocks.{j}.* / segformer.stages.{s}.layer_norm.*
+    旧版 (transformers 4.x, 即 nvidia/mit-bX 实际上传的文件):
+        segformer.encoder.patch_embeddings.{s}.* / segformer.encoder.block.{s}.{j}.* /
+        segformer.encoder.layer_norm.{s}.*
+    """
+    out: Dict[str, torch.Tensor] = {}
+    kv_parts: Dict[str, Dict[str, torch.Tensor]] = {}
+
+    def emit_block(s: int, j: int, rest: str, v: torch.Tensor) -> None:
+        mapped, kv_tag = _map_hf_block_key(rest, s + 1, j)
+        if not mapped:
+            return
+        if kv_tag is None:
+            out[mapped] = v
+        else:
+            which, target = kv_tag
+            kv_parts.setdefault(target, {})[which] = v
+
+    for k, v in sd.items():
+        k0 = k
+        for p in ("segformer.", "encoder."):  # 剥离可选的容器前缀
+            if k0.startswith(p):
+                k0 = k0[len(p):]
+        if k0.startswith(("classifier.", "decode_head.", "head.")):
+            continue
+
+        # ---- blocks: 新版 stages.{s}.blocks.{j}.rest / 旧版 block.{s}.{j}.rest ----
+        m = re.match(r"stages\.(\d+)\.blocks\.(\d+)\.(.+)$", k0)
+        if m:
+            emit_block(int(m[1]), int(m[2]), m[3], v)
+            continue
+        m = re.match(r"block\.(\d+)\.(\d+)\.(.+)$", k0)
+        if m:
+            emit_block(int(m[1]), int(m[2]), m[3], v)
+            continue
+
+        # ---- patch embedding: 新版 stages.{s}.patch_embeddings.*, 旧版 patch_embeddings.{s}.* ----
+        m = re.match(r"stages\.(\d+)\.patch_embeddings\.(proj|layer_norm)\.(weight|bias)$", k0)
+        if m:
+            out[f"patch_embed{int(m[1]) + 1}.{'proj' if m[2] == 'proj' else 'norm'}.{m[3]}"] = v
+            continue
+        m = re.match(r"patch_embeddings\.(\d+)\.(proj|layer_norm)\.(weight|bias)$", k0)
+        if m:
+            out[f"patch_embed{int(m[1]) + 1}.{'proj' if m[2] == 'proj' else 'norm'}.{m[3]}"] = v
+            continue
+
+        # ---- 每阶段末尾 LayerNorm: 新版 stages.{s}.layer_norm.*, 旧版 layer_norm.{s}.* ----
+        m = re.match(r"stages\.(\d+)\.layer_norm\.(weight|bias)$", k0)
+        if m:
+            out[f"norm{int(m[1]) + 1}.{m[2]}"] = v
+            continue
+        m = re.match(r"layer_norm\.(\d+)\.(weight|bias)$", k0)
+        if m:
+            out[f"norm{int(m[1]) + 1}.{m[2]}"] = v
+            continue
+
+    # 融合 k/v -> kv (NVlabs: kv = Linear(dim, 2*dim), 前半 k 后半 v)
+    for target, parts in kv_parts.items():
+        if "k" in parts and "v" in parts:
+            out[target] = torch.cat([parts["k"], parts["v"]], dim=0)
+        else:
+            raise RuntimeError(f"HF 权重缺少成对的 k/v 投影: {target}")
+    return out
+
+
+def _load_state_any(path: Path) -> Dict[str, torch.Tensor]:
+    if path.suffix == ".safetensors":
+        from safetensors.torch import load_file  # timm 依赖自带
+
+        return load_file(str(path))
+    try:
+        state = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception:
+        state = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    if isinstance(state, dict) and all(k.startswith("module.") for k in state):
+        state = {k[len("module."):]: v for k, v in state.items()}
+    return state
+
+
+def _coverage(encoder: MiTEncoder, state: Dict[str, torch.Tensor]) -> Tuple[int, List[str]]:
+    enc_sd = encoder.state_dict()
+    missing = [
+        k for k, t in enc_sd.items()
+        if k not in state or state[k].shape != t.shape
+    ]
+    return len(missing), missing
+
+
+def load_mit_pretrained(encoder: MiTEncoder, path: str | Path) -> None:
+    """加载 ImageNet 预训练 MiT 权重 (NVlabs 原版或 HF nvidia/mit-bX, 自动识别转换)。
+
+    覆盖率必须 100% (编码器所有键), 否则 RuntimeError —— 防止形状不匹配的权重
+    被 strict=False 静默丢弃, 造成"以为加载了预训练实际随机初始化"的隐患。
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"MiT 预训练权重不存在: {path}")
+
+    state = _load_state_any(path)
+
+    # 1) NVlabs 原版: 键名直接匹配
+    n_missing, missing = _coverage(encoder, state)
+    if n_missing == 0:
+        encoder.load_state_dict(state, strict=False)
+        print(f"[MiT] 已加载 NVlabs 原版 ImageNet 权重: {path}")
+        return
+
+    # 2) HF transformers 布局 (nvidia/mit-b0 等): 转换后再校验
+    converted = _convert_hf_segformer(state)
+    n_missing, missing = _coverage(encoder, converted)
+    if n_missing == 0:
+        encoder.load_state_dict(converted, strict=False)
+        print(f"[MiT] 已加载 HF SegFormer 权重并完成键名转换: {path}")
+        return
+
+    total = len(encoder.state_dict())
+    raise RuntimeError(
+        f"MiT 预训练权重加载失败: {path}\n"
+        f"  编码器共 {total} 个参数键, 缺失/不匹配 {n_missing} 个 "
+        f"(覆盖率 {100 * (total - n_missing) / total:.1f}%)\n"
+        f"  缺失示例: {missing[:6]}\n"
+        f"  支持: NVlabs mit_bX.pth / HF nvidia/mit-bX (pytorch_model.bin 或 model.safetensors);\n"
+        f"  请确认权重文件与所选骨干 ({getattr(encoder, 'embed_dims', None)}) 尺寸一致。"
     )
