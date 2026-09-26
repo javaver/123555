@@ -5,17 +5,21 @@ import torch.nn as nn
 
 from baselines.unet.model import UNet
 from baselines.deeplabv3.model import DeepLabV3
-from baselines.dpt.model import DPT
+from baselines.pspnet.model import PSPNet
 from baselines.segformer.model import SegFormer
 from baselines.maskformer.model import MaskFormer
 
 BASELINE_MODELS = {
     "unet": UNet,
     "deeplabv3": DeepLabV3,
-    "dpt": DPT,
+    "pspnet": PSPNet,
     "segformer": SegFormer,
     "maskformer": MaskFormer,
 }
+
+# 掩膜分类范式基线: 训练时输出 (类别 logits, 掩膜 logits) 并使用
+# 二分图匹配 (匈牙利算法) 损失, 而非逐像素 CE+Dice (见 baselines/maskformer/criterion.py)
+MASK_CLASSIFICATION_BASELINES = {"maskformer"}
 
 
 def get_baseline_model(

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""生成论文 Table 1 格式的 4 大村落风貌核心要素对比表。
+"""生成论文双表对比: Table 1 四大村落风貌核心要素表 + Table 2 十类逐类 IoU 表。
 
-涵盖:
+Table 1 涵盖 4 大核心要素 (指标: Precision / Recall / F1-score / IoU):
   - Traditional Buildings (老建筑)
   - New Buildings (新建建筑)
   - Greenery (生态绿化: 山林 + 树木合并)
   - Water Bodies (水系水体)
   - Avg (四大要素平均)
 
-指标: Precision, Recall, F1-score, IoU
+Table 2 涵盖全部 10 类地物的逐类 IoU + 宏平均 mIoU (仅本地已训练模型可算,
+无检查点的模型以 "—" 占位——论文基准只提供 4 要素口径数值)。
 
 用法:
     python scripts/compare_all.py --datasets datasets/
@@ -49,12 +50,11 @@ PAPER_REFERENCE = {
         "F1-score": [0.6634, 0.7076, 0.7850, 0.5832, 0.6850],
         "IoU": [0.4963, 0.5475, 0.6460, 0.4126, 0.5266],
     },
-    "DPT": {
-        "Precision": [0.7522, 0.7626, 0.8439, 0.5414, 0.7250],
-        "Recall": [0.7419, 0.8078, 0.8398, 0.8109, 0.8001],
-        "F1-score": [0.7470, 0.7846, 0.8419, 0.6493, 0.7557],
-        "IoU": [0.5962, 0.6455, 0.7269, 0.4807, 0.6123],
-    },
+    # TODO(论文数值): PSPNet 为本轮新增基线, 论文定稿后在此填入 4 要素基准值,
+    # 未填入前 compare_all 对无本地权重的 PSPNet 以 "-" 占位 (不虚构对照数字)。
+    # "PSPNet": {
+    #     "Precision": [...], "Recall": [...], "F1-score": [...], "IoU": [...],
+    # },
     "SegFormer": {
         "Precision": [0.7486, 0.7917, 0.8580, 0.5943, 0.7481],
         "Recall": [0.7367, 0.7840, 0.8432, 0.7780, 0.7855],
@@ -74,6 +74,12 @@ PAPER_REFERENCE = {
         "IoU": [0.6530, 0.7355, 0.7802, 0.8093, 0.7445],
     },
 }
+
+# Table 2 终端打印用的短列名 (与 CLASS_NAMES 一一对应)
+CLASS_SHORT = [
+    "BareSoil", "CultLand", "Rail/Hwy", "MtnForest", "NakedMtn",
+    "NewBldg", "OldBldg", "Road", "Tree", "Water",
+]
 
 
 def load_test_rows(datasets: Path, key: str = "split_a"):
@@ -143,24 +149,44 @@ def compute_4elements_metrics(cm: np.ndarray) -> Dict[str, List[float]]:
     return results
 
 
+def compute_perclass_iou(cm: np.ndarray) -> Tuple[List[float], float]:
+    """从混淆矩阵计算 10 类逐类 IoU 与宏平均 mIoU。
+
+    宏平均只统计真实出现过的类 (gt 行和 > 0), 与 src/dinoseg/metrics.py 口径一致。
+    """
+    tp = np.diag(cm).astype(np.float64)
+    union = cm.sum(axis=1) + cm.sum(axis=0) - tp
+    iou = np.where(union > 0, tp / np.clip(union, 1e-9, None), 0.0)
+    present = cm.sum(axis=1) > 0
+    miou = float(iou[present].mean()) if present.any() else 0.0
+    return [float(v) for v in iou], miou
+
+
 @torch.no_grad()
 def eval_checkpoint(ckpt_path: Path, loader: DataLoader, device: torch.device) -> np.ndarray:
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     num_classes = len(CLASS_NAMES)
     meter = ConfusionMeter(num_classes)
 
     # 判断模型类型
-    if "cfg" in ckpt and "encoder" in ckpt["cfg"]:
-        # DINO-Seg
+    if "cfg" in ckpt and "encoder" in ckpt.get("cfg", {}):
+        # DINO-Seg (参数名是 encoder_id, 不是 encoder_name)
         model = DINOvSeg(
-            encoder_name=ckpt["cfg"]["encoder"],
+            encoder_id=ckpt["cfg"]["encoder"],
             pretrained=False,
             num_classes=num_classes,
         )
         model.load_state_dict(ckpt["model"])
     elif "arch" in ckpt:
-        # Baseline model
-        model = get_baseline_model(ckpt["arch"], num_classes=num_classes, pretrained=False)
+        # Baseline: arch_kwargs 含骨干等 (如 segformer 的 mit_b0)
+        arch_kwargs = dict(ckpt.get("arch_kwargs") or {})
+        arch_kwargs.pop("pretrained_from", None)  # 评估不重新加载预训练文件
+        model = get_baseline_model(
+            ckpt["arch"],
+            num_classes=num_classes,
+            pretrained=False,
+            **arch_kwargs,
+        )
         model.load_state_dict(ckpt["model"])
     else:
         raise ValueError(f"无法识别检查点结构: {ckpt_path}")
@@ -174,82 +200,148 @@ def eval_checkpoint(ckpt_path: Path, loader: DataLoader, device: torch.device) -
     return meter.cm
 
 
+def print_table1(rows: List[dict]) -> None:
+    header = ["Method", "Metric", "Traditional Buildings", "New Buildings", "Greenery", "Water Bodies", "Avg"]
+    print("\n" + "=" * 105)
+    print("Table 1. Quantitative comparison of 4 core village elements (P / R / F1 / IoU)")
+    print("=" * 105)
+    print(f"{header[0]:14s} | {header[1]:10s} | {header[2]:21s} | {header[3]:13s} | {header[4]:10s} | {header[5]:12s} | {header[6]:8s}")
+    print("-" * 105)
+    for r in rows:
+        print(
+            f"{r['Method']:14s} | {r['Metric']:10s} | {r['Traditional Buildings']:>21s} | "
+            f"{r['New Buildings']:>13s} | {r['Greenery']:>10s} | {r['Water Bodies']:>12s} | {r['Avg']:>8s}"
+        )
+    print("-" * 105)
+
+
+def print_table2(rows: List[dict]) -> None:
+    print("\n" + "=" * 120)
+    print("Table 2. Per-class IoU comparison on the traditional village dataset (10 classes + mIoU)")
+    print("=" * 120)
+    head = f"{'Method':14s} | " + " | ".join(f"{c:>9s}" for c in CLASS_SHORT) + f" | {'mIoU':>8s}"
+    print(head)
+    print("-" * 120)
+    for r in rows:
+        # 数据键是 CLASS_NAMES; CLASS_SHORT 仅用于表头显示
+        vals = " | ".join(f"{r[c]:>9s}" for c in CLASS_NAMES)
+        print(f"{r['Method']:14s} | {vals} | {r['mIoU']:>8s}")
+    print("-" * 120)
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="对比评估 Table 1")
+    ap = argparse.ArgumentParser(description="对比评估: 论文 Table 1 + Table 2 双表")
     ap.add_argument("--datasets", type=Path, default=Path("datasets"))
     ap.add_argument("--split-key", default="split_a")
     ap.add_argument("--runs", type=Path, default=Path("runs"))
     ap.add_argument("--out", type=Path, default=Path("runs/comparison_table1.csv"))
+    ap.add_argument("--out2", type=Path, default=Path("runs/comparison_table2.csv"))
+    ap.add_argument(
+        "--allow-paper-fallback",
+        action="store_true",
+        help="缺本地 best.pt 时填入论文对照值并标 (paper); 默认缺权重直接报错, 避免误当本地结果",
+    )
     a = ap.parse_args()
+
+    if not (a.datasets / "manifest.csv").exists():
+        raise SystemExit(f"缺少数据集: {a.datasets}/manifest.csv")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     test_rows = load_test_rows(a.datasets, a.split_key)
+    if not test_rows:
+        raise SystemExit(f"测试集为空 (split_key={a.split_key})")
     test_ds = TileDataset(a.datasets, test_rows)
     test_dl = DataLoader(test_ds, batch_size=4, shuffle=False, num_workers=0)
 
-    # 待对比的算法清单
-    models_to_compare = ["UNet", "DeepLabV3", "DPT", "SegFormer", "MaskFormer", "DINO-Seg"]
+    # 待对比的算法清单 (最终基线阵容: UNet / PSPNet / DeepLabV3 / SegFormer / MaskFormer + 主模型 DINO-Seg)
+    models_to_compare = ["UNet", "PSPNet", "DeepLabV3", "SegFormer", "MaskFormer", "DINO-Seg"]
     ckpt_map = {
         "UNet": a.runs / "unet" / "best.pt",
+        "PSPNet": a.runs / "pspnet" / "best.pt",
         "DeepLabV3": a.runs / "deeplabv3" / "best.pt",
-        "DPT": a.runs / "dpt" / "best.pt",
         "SegFormer": a.runs / "segformer" / "best.pt",
         "MaskFormer": a.runs / "maskformer" / "best.pt",
         "DINO-Seg": a.runs / "dinoseg" / "best.pt",
     }
 
-    final_table = []
-    print("\n" + "=" * 80)
-    print("Table 1. Quantitative comparison of different methods on traditional village dataset")
-    print("=" * 80)
-
-    header = ["Method", "Metric", "Traditional Buildings", "New Buildings", "Greenery", "Water Bodies", "Avg"]
-    print(f"{header[0]:14s} | {header[1]:10s} | {header[2]:21s} | {header[3]:13s} | {header[4]:10s} | {header[5]:12s} | {header[6]:8s}")
-    print("-" * 105)
+    table1_rows: List[dict] = []
+    table2_rows: List[dict] = []
+    missing = [m for m, p in ckpt_map.items() if not p.exists()]
+    if missing and not a.allow_paper_fallback:
+        raise SystemExit(
+            "以下模型缺少本地 best.pt, 拒绝静默填入论文数字:\n  - "
+            + "\n  - ".join(f"{m}: {ckpt_map[m]}" for m in missing)
+            + "\n若只要对照表预览, 请显式加 --allow-paper-fallback"
+        )
 
     for m_name in models_to_compare:
         ckpt_path = ckpt_map[m_name]
         is_local_evaluated = False
+        perclass: Tuple[List[float], float] | None = None
 
         if ckpt_path.exists():
             print(f"-> 发现本地检查点: {ckpt_path}, 正在测试集评测...")
             cm = eval_checkpoint(ckpt_path, test_dl, device)
             metrics = compute_4elements_metrics(cm)
+            perclass = compute_perclass_iou(cm)
             is_local_evaluated = True
         else:
-            # 使用原论文基准对照
-            metrics = PAPER_REFERENCE[m_name]
+            if m_name in PAPER_REFERENCE:
+                print(f"-> 缺少 {ckpt_path}, 使用论文对照值 (paper)")
+                metrics = PAPER_REFERENCE[m_name]
+            else:
+                print(f"-> 缺少 {ckpt_path}, 且论文对照值尚未提供 ({m_name}), 以 '-' 占位")
+                metrics = None
 
         src_tag = "(eval)" if is_local_evaluated else "(paper)"
 
-        for idx, metric_name in enumerate(["Precision", "Recall", "F1-score", "IoU"]):
-            vals = metrics[metric_name]
-            method_col = f"{m_name} {src_tag}" if idx == 0 else ""
-            row_str = (
-                f"{method_col:14s} | {metric_name:10s} | "
-                f"{vals[0]:21.4f} | {vals[1]:13.4f} | "
-                f"{vals[2]:10.4f} | {vals[3]:12.4f} | "
-                f"{vals[4]:8.4f}"
-            )
-            print(row_str)
-            final_table.append({
+        # ---- Table 1: 4 大核心要素 ----
+        for metric_name in ["Precision", "Recall", "F1-score", "IoU"]:
+            vals = metrics[metric_name] if metrics is not None else None
+            table1_rows.append({
                 "Method": f"{m_name} {src_tag}",
                 "Metric": metric_name,
-                "Traditional Buildings": f"{vals[0]:.4f}",
-                "New Buildings": f"{vals[1]:.4f}",
-                "Greenery": f"{vals[2]:.4f}",
-                "Water Bodies": f"{vals[3]:.4f}",
-                "Avg": f"{vals[4]:.4f}",
+                "Traditional Buildings": f"{vals[0]:.4f}" if vals else "-",
+                "New Buildings": f"{vals[1]:.4f}" if vals else "-",
+                "Greenery": f"{vals[2]:.4f}" if vals else "-",
+                "Water Bodies": f"{vals[3]:.4f}" if vals else "-",
+                "Avg": f"{vals[4]:.4f}" if vals else "-",
             })
-        print("-" * 105)
 
-    # 导出 CSV
+        # ---- Table 2: 10 类逐类 IoU + mIoU ----
+        row2: Dict[str, str] = {"Method": f"{m_name} {src_tag}"}
+        if perclass is not None:
+            ious, miou = perclass
+            for cname, v in zip(CLASS_NAMES, ious):
+                row2[cname] = f"{v:.4f}"
+            row2["mIoU"] = f"{miou:.4f}"
+        else:
+            for cname in CLASS_NAMES:
+                row2[cname] = "-"
+            row2["mIoU"] = "-"
+        table2_rows.append(row2)
+
+    # ---- 终端打印双表 ----
+    print_table1(table1_rows)
+    print_table2(table2_rows)
+
+    # ---- 导出 CSV: Table 1 ----
+    header1 = ["Method", "Metric", "Traditional Buildings", "New Buildings", "Greenery", "Water Bodies", "Avg"]
     a.out.parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "w", newline="", encoding="utf-8-sig") as fh:
-        writer = csv.DictWriter(fh, fieldnames=header)
+        writer = csv.DictWriter(fh, fieldnames=header1)
         writer.writeheader()
-        writer.writerows(final_table)
-    print(f"\n[OK] 对比总表已导出 -> {a.out}\n")
+        writer.writerows(table1_rows)
+    print(f"\n[OK] Table 1 已导出 -> {a.out}")
+
+    # ---- 导出 CSV: Table 2 ----
+    header2 = ["Method"] + list(CLASS_NAMES) + ["mIoU"]
+    a.out2.parent.mkdir(parents=True, exist_ok=True)
+    with open(a.out2, "w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.DictWriter(fh, fieldnames=header2)
+        writer.writeheader()
+        writer.writerows(table2_rows)
+    print(f"[OK] Table 2 已导出 -> {a.out2}\n")
     return 0
 
 

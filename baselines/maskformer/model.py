@@ -3,9 +3,18 @@
 Reference:
     Cheng et al. "Per-Pixel Classification is Not All You Need for Semantic Segmentation."
     NeurIPS 2021.
+
+训练采用二分图匹配 (匈牙利算法) 损失 (见 ``baselines/maskformer/criterion.py``):
+模型以掩膜分类 (mask classification) 形式输出 (类别 logits, 掩膜 logits),
+由 HungarianMatcher 将 N 个 query 与 GT 段落一一匹配后计算
+    2.0 * CE(类别, ∅ 权重 0.1) + 5.0 * BCE(掩膜) + 5.0 * Dice(掩膜)。
+推理时按论文语义装配 (semantic inference) 还原为逐像素 logits,
+与其余基线保持统一的 (B, K, H, W) 接口。
 """
+from __future__ import annotations
 
 from typing import List, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -121,28 +130,51 @@ class MaskFormer(nn.Module):
             num_classes=num_classes,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        orig_hw = x.shape[-2:]
+    def extract_pixel_embeds(self, x: torch.Tensor) -> torch.Tensor:
+        """Backbone + pixel decoder -> per-pixel embeddings (B, C, H/4, W/4)."""
         feats = self.encoder(x)
         used_feats = feats[1:] if len(feats) > 4 else feats
-        pixel_embeds = self.pixel_decoder(used_feats)  # (B, C, H/4, W/4)
+        return self.pixel_decoder(used_feats)
 
-        pred_classes, pred_masks = self.mask_decoder(pixel_embeds)
-        # pred_classes: (B, N, K+1), pred_masks: (B, N, H/4, W/4)
+    def forward_mask_classification(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Mask-classification outputs for the Hungarian (bipartite) matching loss.
 
-        # Semantic assembly: P(c, h, w) = sum_q P(c|q) * sigmoid(M_q(h, w))
-        class_probs = F.softmax(pred_classes, dim=-1)[..., : self.num_classes]  # (B, N, K)
+        Returns:
+            pred_logits: (B, N, K+1) per-query class logits (∅ = index K);
+            pred_masks:  (B, N, H/4, W/4) per-query binary mask logits.
+        """
+        pixel_embeds = self.extract_pixel_embeds(x)
+        return self.mask_decoder(pixel_embeds)
+
+    @staticmethod
+    def semantic_inference(
+        pred_classes: torch.Tensor,
+        pred_masks: torch.Tensor,
+        out_hw: Tuple[int, int],
+        num_classes: int,
+    ) -> torch.Tensor:
+        """P(c, h, w) = sum_q P(c|q) * sigmoid(M_q(h, w)), log 后上采样回原尺寸。"""
+        class_probs = F.softmax(pred_classes, dim=-1)[..., :num_classes]  # (B, N, K)
         mask_probs = torch.sigmoid(pred_masks)  # (B, N, H/4, W/4)
 
         b, n, h_sub, w_sub = mask_probs.shape
         # (B, K, N) x (B, N, H_sub*W_sub) -> (B, K, H_sub*W_sub)
         sem_probs = torch.bmm(class_probs.transpose(1, 2), mask_probs.flatten(2)).view(
-            b, self.num_classes, h_sub, w_sub
+            b, num_classes, h_sub, w_sub
         )
 
         # Convert normalized probabilities to logits: log(P + eps)
         sem_logits = torch.log(sem_probs + 1e-7)
 
-        if sem_logits.shape[-2:] != orig_hw:
-            sem_logits = F.interpolate(sem_logits, size=orig_hw, mode="bilinear", align_corners=False)
+        if sem_logits.shape[-2:] != out_hw:
+            sem_logits = F.interpolate(sem_logits, size=out_hw, mode="bilinear", align_corners=False)
         return sem_logits
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """统一逐像素语义 logits 接口 (B, K, H, W), 供评估/推理直接 argmax。"""
+        orig_hw = x.shape[-2:]
+        pixel_embeds = self.extract_pixel_embeds(x)
+        pred_classes, pred_masks = self.mask_decoder(pixel_embeds)
+        return self.semantic_inference(pred_classes, pred_masks, orig_hw, self.num_classes)
