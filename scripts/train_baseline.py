@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""训练语义分割基线模型 (UNet, DeepLabV3, DPT, SegFormer, MaskFormer)。
+"""训练语义分割基线模型 (UNet, PSPNet, DeepLabV3, SegFormer, MaskFormer)。
 
 - SegFormer 默认 MiT (mit_b0..mit_b5); 官方 ImageNet 权重用 --pretrained-from mit_b0.pth
 - MaskFormer 用匈牙利匹配损失; 其余基线为逐像素 CE + Dice
@@ -7,6 +7,7 @@
 
 用法 (GPU 服务器示例):
     python scripts/train_baseline.py --model deeplabv3 --datasets datasets/ --pretrained 1 --batch 8 --workers 4
+    python scripts/train_baseline.py --model pspnet --datasets datasets/ --pretrained 1 --batch 8 --workers 4
     python scripts/train_baseline.py --model segformer --datasets datasets/ \\
         --pretrained-from /root/weights/mit_b0.pth --batch 8 --workers 4
     python scripts/train_baseline.py --model maskformer --datasets datasets/ --pretrained 1 --batch 4 --workers 4
@@ -37,8 +38,8 @@ from baselines.maskformer.criterion import MaskFormerCriterion
 # 各模型默认骨干 (写入 ckpt.arch_kwargs, 评估端可复原)
 DEFAULT_BACKBONES = {
     "segformer": "mit_b0",
+    "pspnet": "resnet50",
     "maskformer": "resnet50",
-    "dpt": "vit_base_patch16_224",
 }
 
 
@@ -122,7 +123,7 @@ def main() -> int:
     ap.add_argument(
         "--backbone",
         default=None,
-        help="骨干覆盖 (segformer: mit_b0..b5; maskformer: resnet50; dpt: vit_base_patch16_224)",
+        help="骨干覆盖 (segformer: mit_b0..b5; pspnet/maskformer: resnet50 等 timm 骨干)",
     )
     ap.add_argument("--epochs", type=int, default=80)
     ap.add_argument("--batch", type=int, default=8)

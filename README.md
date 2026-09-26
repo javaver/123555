@@ -191,13 +191,13 @@ python scripts/infer.py \
 
 ### 7. 五大基线算法训练与论文双表（Table 1 + Table 2）对比生成
 
-仓库内置了 5 大最具代表性的经典与前沿基线算法（涵盖 CNN 跳跃连接、空洞卷积金字塔、Transformer 特征重组、层级化自注意力与掩膜分类）：
+仓库内置了最终确定的 5 大基线算法（涵盖 CNN 跳跃连接、金字塔池化上下文聚合、空洞卷积金字塔、层级化自注意力与掩膜分类）：
 
 ```bash
 # 训练任意基线 (服务器推荐 --pretrained 1 / SegFormer 用官方 mit_b0.pth)
 python scripts/train_baseline.py --model unet --datasets datasets/ --pretrained 0 --batch 16 --require-cuda
 python scripts/train_baseline.py --model deeplabv3 --datasets datasets/ --pretrained 1 --batch 8 --require-cuda
-python scripts/train_baseline.py --model dpt --datasets datasets/ --pretrained 1 --batch 4 --require-cuda
+python scripts/train_baseline.py --model pspnet --datasets datasets/ --pretrained 1 --batch 8 --require-cuda
 python scripts/train_baseline.py --model segformer --datasets datasets/ \
   --pretrained-from /root/weights/mit_b0.pth --batch 8 --require-cuda
 python scripts/train_baseline.py --model maskformer --datasets datasets/ --pretrained 1 --batch 4 --require-cuda
@@ -210,6 +210,7 @@ python scripts/compare_all.py --datasets datasets/
 ```
 
 - **SegFormer**：编码器为仓库内 **MiT（mit_b0..mit_b5）**，`--pretrained-from` 加载 ImageNet 权重——NVlabs 官方 `mit_bX.pth` 直载，或 HF 官方 [`nvidia/mit-b0`](https://huggingface.co/nvidia/mit-b0) 的 `pytorch_model.bin`（transformers 新旧键名布局自动转换，100% 覆盖率硬校验）；`--pretrained` 对 MiT 无效；
+- **PSPNet**：ResNet-50（`output_stride=16` 空洞卷积，与 DeepLabV3 口径对齐）+ 金字塔池化模块（bins=1/2/3/6）聚合全局多尺度上下文；论文 4 要素对照值定稿后在 `scripts/compare_all.py` 的 `TODO(论文数值)` 处填入，此前无本地权重的 PSPNet 行以 `-` 占位；
 - **MaskFormer**：匈牙利匹配损失（类别 CE，∅ 权重 0.1 + 掩膜 BCE + Dice）；
 - 读取 `runs/<model>/best.pt`；**默认拒绝**缺权重时静默填论文数（避免把 `(paper)` 当成本地结果）；
 - **Table 1** → `runs/comparison_table1.csv`；**Table 2** → `runs/comparison_table2.csv`。
@@ -223,7 +224,7 @@ python scripts/compare_all.py --datasets datasets/
 ├── baselines/                         # 5 大基线算法独立模块
 │   ├── unet/                          # 经典 U-Net (Skip Connections)
 │   ├── deeplabv3/                     # DeepLabV3 (ResNet-50 + ASPP)
-│   ├── dpt/                           # DPT (ViT + Reassemble Blocks)
+│   ├── pspnet/                        # PSPNet (ResNet-50 + 金字塔池化模块 PPM)
 │   ├── segformer/                     # SegFormer (仓库内 MiT 编码器 + All-MLP Decoder)
 │   │   └── mit.py                     # Mix Transformer (mit_b0..b5), 兼容官方权重键名
 │   └── maskformer/                    # MaskFormer (Mask-Classification)

@@ -50,12 +50,11 @@ PAPER_REFERENCE = {
         "F1-score": [0.6634, 0.7076, 0.7850, 0.5832, 0.6850],
         "IoU": [0.4963, 0.5475, 0.6460, 0.4126, 0.5266],
     },
-    "DPT": {
-        "Precision": [0.7522, 0.7626, 0.8439, 0.5414, 0.7250],
-        "Recall": [0.7419, 0.8078, 0.8398, 0.8109, 0.8001],
-        "F1-score": [0.7470, 0.7846, 0.8419, 0.6493, 0.7557],
-        "IoU": [0.5962, 0.6455, 0.7269, 0.4807, 0.6123],
-    },
+    # TODO(论文数值): PSPNet 为本轮新增基线, 论文定稿后在此填入 4 要素基准值,
+    # 未填入前 compare_all 对无本地权重的 PSPNet 以 "-" 占位 (不虚构对照数字)。
+    # "PSPNet": {
+    #     "Precision": [...], "Recall": [...], "F1-score": [...], "IoU": [...],
+    # },
     "SegFormer": {
         "Precision": [0.7486, 0.7917, 0.8580, 0.5943, 0.7481],
         "Recall": [0.7367, 0.7840, 0.8432, 0.7780, 0.7855],
@@ -254,12 +253,12 @@ def main() -> int:
     test_ds = TileDataset(a.datasets, test_rows)
     test_dl = DataLoader(test_ds, batch_size=4, shuffle=False, num_workers=0)
 
-    # 待对比的算法清单
-    models_to_compare = ["UNet", "DeepLabV3", "DPT", "SegFormer", "MaskFormer", "DINO-Seg"]
+    # 待对比的算法清单 (最终基线阵容: UNet / PSPNet / DeepLabV3 / SegFormer / MaskFormer + 主模型 DINO-Seg)
+    models_to_compare = ["UNet", "PSPNet", "DeepLabV3", "SegFormer", "MaskFormer", "DINO-Seg"]
     ckpt_map = {
         "UNet": a.runs / "unet" / "best.pt",
+        "PSPNet": a.runs / "pspnet" / "best.pt",
         "DeepLabV3": a.runs / "deeplabv3" / "best.pt",
-        "DPT": a.runs / "dpt" / "best.pt",
         "SegFormer": a.runs / "segformer" / "best.pt",
         "MaskFormer": a.runs / "maskformer" / "best.pt",
         "DINO-Seg": a.runs / "dinoseg" / "best.pt",
@@ -287,22 +286,26 @@ def main() -> int:
             perclass = compute_perclass_iou(cm)
             is_local_evaluated = True
         else:
-            print(f"-> 缺少 {ckpt_path}, 使用论文对照值 (paper)")
-            metrics = PAPER_REFERENCE[m_name]
+            if m_name in PAPER_REFERENCE:
+                print(f"-> 缺少 {ckpt_path}, 使用论文对照值 (paper)")
+                metrics = PAPER_REFERENCE[m_name]
+            else:
+                print(f"-> 缺少 {ckpt_path}, 且论文对照值尚未提供 ({m_name}), 以 '-' 占位")
+                metrics = None
 
         src_tag = "(eval)" if is_local_evaluated else "(paper)"
 
         # ---- Table 1: 4 大核心要素 ----
         for metric_name in ["Precision", "Recall", "F1-score", "IoU"]:
-            vals = metrics[metric_name]
+            vals = metrics[metric_name] if metrics is not None else None
             table1_rows.append({
                 "Method": f"{m_name} {src_tag}",
                 "Metric": metric_name,
-                "Traditional Buildings": f"{vals[0]:.4f}",
-                "New Buildings": f"{vals[1]:.4f}",
-                "Greenery": f"{vals[2]:.4f}",
-                "Water Bodies": f"{vals[3]:.4f}",
-                "Avg": f"{vals[4]:.4f}",
+                "Traditional Buildings": f"{vals[0]:.4f}" if vals else "-",
+                "New Buildings": f"{vals[1]:.4f}" if vals else "-",
+                "Greenery": f"{vals[2]:.4f}" if vals else "-",
+                "Water Bodies": f"{vals[3]:.4f}" if vals else "-",
+                "Avg": f"{vals[4]:.4f}" if vals else "-",
             })
 
         # ---- Table 2: 10 类逐类 IoU + mIoU ----

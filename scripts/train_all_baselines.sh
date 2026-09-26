@@ -13,8 +13,8 @@ python -u scripts/train_baseline.py --model unet --pretrained 0 --batch 16 "${CO
 echo "[2/5] DeepLabV3 (ImageNet)"
 python -u scripts/train_baseline.py --model deeplabv3 --pretrained 1 --batch 8 "${COMMON[@]}"
 
-echo "[3/5] DPT (ImageNet ViT)"
-python -u scripts/train_baseline.py --model dpt --pretrained 1 --batch 4 "${COMMON[@]}"
+echo "[3/5] PSPNet (ResNet-50 ImageNet + PPM)"
+python -u scripts/train_baseline.py --model pspnet --pretrained 1 --batch 8 "${COMMON[@]}"
 
 echo "[4/5] SegFormer (MiT-B0)"
 if [[ -n "$MIT_CKPT" && -f "$MIT_CKPT" ]]; then
