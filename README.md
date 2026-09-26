@@ -194,23 +194,25 @@ python scripts/infer.py \
 仓库内置了 5 大最具代表性的经典与前沿基线算法（涵盖 CNN 跳跃连接、空洞卷积金字塔、Transformer 特征重组、层级化自注意力与掩膜分类）：
 
 ```bash
-# 训练任意基线模型 (可指定 unet / deeplabv3 / dpt / segformer / maskformer)
-python scripts/train_baseline.py --model unet --datasets datasets/ --batch 16 --epochs 80
-python scripts/train_baseline.py --model deeplabv3 --datasets datasets/ --batch 16 --epochs 80
-python scripts/train_baseline.py --model dpt --datasets datasets/ --batch 16 --epochs 80
-python scripts/train_baseline.py --model segformer --datasets datasets/ --batch 16 --epochs 80
-python scripts/train_baseline.py --model segformer --backbone mit_b2 --datasets datasets/   # 更大 MiT 骨干
-python scripts/train_baseline.py --model maskformer --datasets datasets/ --batch 16 --epochs 80
+# 训练任意基线 (服务器推荐 --pretrained 1 / SegFormer 用官方 mit_b0.pth)
+python scripts/train_baseline.py --model unet --datasets datasets/ --pretrained 0 --batch 16 --require-cuda
+python scripts/train_baseline.py --model deeplabv3 --datasets datasets/ --pretrained 1 --batch 8 --require-cuda
+python scripts/train_baseline.py --model dpt --datasets datasets/ --pretrained 1 --batch 4 --require-cuda
+python scripts/train_baseline.py --model segformer --datasets datasets/ \
+  --pretrained-from /root/weights/mit_b0.pth --batch 8 --require-cuda
+python scripts/train_baseline.py --model maskformer --datasets datasets/ --pretrained 1 --batch 4 --require-cuda
 
-# 一键生成论文双表 (Table 1 四大风貌核心要素 + Table 2 十类逐类 IoU/mIoU)
+# 或一键串行训练 5 个基线
+bash scripts/train_all_baselines.sh datasets/ /root/weights/mit_b0.pth
+
+# 一键生成论文双表 (缺权重默认报错; 仅预览论文对照时加 --allow-paper-fallback)
 python scripts/compare_all.py --datasets datasets/
 ```
 
-- **SegFormer**：编码器为仓库内实现的 **MiT（Mix Transformer, mit_b0..mit_b5）**，与 NVlabs 官方 `mit_bX.pth` ImageNet 权重键名兼容（`--backbone mit_b0` 默认，亦可用 `--backbone pvt_v2_b0` 等 timm 骨干兼容旧配置）；
-- **MaskFormer**：训练采用论文标准的**二分图匹配（匈牙利算法）损失**（类别 CE，∅ 权重 0.1 + 掩膜 BCE + Dice，权重 2/5/5），推理经语义装配还原为逐像素 logits；
-- 自动读取各个模型的最佳权重 `runs/<model>/best.pt`；
-- **Table 1** 输出 4 大村落核心风貌要素（传统建筑、新建建筑、生态绿化、水体水系及 Avg）的 P/R/F1/IoU，导出 `runs/comparison_table1.csv`；若本地尚未训练某基线，自动填入原论文基准对照值 `(paper)`；
-- **Table 2** 输出全部 10 类地物逐类 IoU 与宏平均 mIoU，导出 `runs/comparison_table2.csv`（论文基准未提供逐类数值，未训练模型以 `-` 占位）。
+- **SegFormer**：编码器为仓库内 **MiT（mit_b0..mit_b5）**，与 NVlabs 官方 `mit_bX.pth` 键名兼容；`--pretrained` 对 MiT 无效，必须 `--pretrained-from`；
+- **MaskFormer**：匈牙利匹配损失（类别 CE，∅ 权重 0.1 + 掩膜 BCE + Dice）；
+- 读取 `runs/<model>/best.pt`；**默认拒绝**缺权重时静默填论文数（避免把 `(paper)` 当成本地结果）；
+- **Table 1** → `runs/comparison_table1.csv`；**Table 2** → `runs/comparison_table2.csv`。
 
 ---
 
@@ -250,12 +252,9 @@ python scripts/compare_all.py --datasets datasets/
 │   └── splits.csv                     # A/B/C 三档数据划分
 ├── scripts/
 │   ├── train.py                       # DINO-Seg 训练主入口
-│   ├── train_baseline.py              # 统一基线训练入口 (--model unet/deeplabv3/..., --backbone 覆盖骨干)
-│   ├── compare_all.py                 # 论文双表生成器 (Table 1 四要素 + Table 2 逐类 IoU)
-│   ├── eval.py                        # 评估入口（Macro + Micro 全口径）
-│   ├── infer.py                       # 推理入口（支持全集切片与任意尺寸外部新图）
-│   └── cache_features.py              # DINOv3 特征离线缓存
-├── src/dinoseg/
+│   ├── train_baseline.py              # 统一基线训练 (--pretrained / --pretrained-from / --require-cuda)
+│   ├── train_all_baselines.sh         # 服务器一键串训 5 基线
+│   ├── compare_all.py                 # 论文双表 (缺权重默认报错; --allow-paper-fallback 可选)
 │   ├── eval.py                        # 评估入口（Macro + Micro 全口径）
 │   ├── infer.py                       # 推理入口（支持全集切片与任意尺寸外部新图）
 │   └── cache_features.py              # DINOv3 特征离线缓存

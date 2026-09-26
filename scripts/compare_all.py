@@ -165,26 +165,28 @@ def compute_perclass_iou(cm: np.ndarray) -> Tuple[List[float], float]:
 
 @torch.no_grad()
 def eval_checkpoint(ckpt_path: Path, loader: DataLoader, device: torch.device) -> np.ndarray:
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     num_classes = len(CLASS_NAMES)
     meter = ConfusionMeter(num_classes)
 
     # 判断模型类型
-    if "cfg" in ckpt and "encoder" in ckpt["cfg"]:
-        # DINO-Seg
+    if "cfg" in ckpt and "encoder" in ckpt.get("cfg", {}):
+        # DINO-Seg (参数名是 encoder_id, 不是 encoder_name)
         model = DINOvSeg(
-            encoder_name=ckpt["cfg"]["encoder"],
+            encoder_id=ckpt["cfg"]["encoder"],
             pretrained=False,
             num_classes=num_classes,
         )
         model.load_state_dict(ckpt["model"])
     elif "arch" in ckpt:
-        # Baseline model (arch_kwargs 携带骨干等架构参数, 如 segformer 的 mit_b0)
+        # Baseline: arch_kwargs 含骨干等 (如 segformer 的 mit_b0)
+        arch_kwargs = dict(ckpt.get("arch_kwargs") or {})
+        arch_kwargs.pop("pretrained_from", None)  # 评估不重新加载预训练文件
         model = get_baseline_model(
             ckpt["arch"],
             num_classes=num_classes,
             pretrained=False,
-            **ckpt.get("arch_kwargs", {}),
+            **arch_kwargs,
         )
         model.load_state_dict(ckpt["model"])
     else:
@@ -222,7 +224,8 @@ def print_table2(rows: List[dict]) -> None:
     print(head)
     print("-" * 120)
     for r in rows:
-        vals = " | ".join(f"{r[c]:>9s}" for c in CLASS_SHORT)
+        # 数据键是 CLASS_NAMES; CLASS_SHORT 仅用于表头显示
+        vals = " | ".join(f"{r[c]:>9s}" for c in CLASS_NAMES)
         print(f"{r['Method']:14s} | {vals} | {r['mIoU']:>8s}")
     print("-" * 120)
 
@@ -234,10 +237,20 @@ def main() -> int:
     ap.add_argument("--runs", type=Path, default=Path("runs"))
     ap.add_argument("--out", type=Path, default=Path("runs/comparison_table1.csv"))
     ap.add_argument("--out2", type=Path, default=Path("runs/comparison_table2.csv"))
+    ap.add_argument(
+        "--allow-paper-fallback",
+        action="store_true",
+        help="缺本地 best.pt 时填入论文对照值并标 (paper); 默认缺权重直接报错, 避免误当本地结果",
+    )
     a = ap.parse_args()
+
+    if not (a.datasets / "manifest.csv").exists():
+        raise SystemExit(f"缺少数据集: {a.datasets}/manifest.csv")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     test_rows = load_test_rows(a.datasets, a.split_key)
+    if not test_rows:
+        raise SystemExit(f"测试集为空 (split_key={a.split_key})")
     test_ds = TileDataset(a.datasets, test_rows)
     test_dl = DataLoader(test_ds, batch_size=4, shuffle=False, num_workers=0)
 
@@ -254,6 +267,13 @@ def main() -> int:
 
     table1_rows: List[dict] = []
     table2_rows: List[dict] = []
+    missing = [m for m, p in ckpt_map.items() if not p.exists()]
+    if missing and not a.allow_paper_fallback:
+        raise SystemExit(
+            "以下模型缺少本地 best.pt, 拒绝静默填入论文数字:\n  - "
+            + "\n  - ".join(f"{m}: {ckpt_map[m]}" for m in missing)
+            + "\n若只要对照表预览, 请显式加 --allow-paper-fallback"
+        )
 
     for m_name in models_to_compare:
         ckpt_path = ckpt_map[m_name]
@@ -267,7 +287,7 @@ def main() -> int:
             perclass = compute_perclass_iou(cm)
             is_local_evaluated = True
         else:
-            # Table 1 使用原论文基准对照; Table 2 论文未提供逐类数值, 以 "-" 占位
+            print(f"-> 缺少 {ckpt_path}, 使用论文对照值 (paper)")
             metrics = PAPER_REFERENCE[m_name]
 
         src_tag = "(eval)" if is_local_evaluated else "(paper)"
