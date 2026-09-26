@@ -8,7 +8,7 @@
 #
 # 换数据划分 (B/C) —— 自动写入 runs_b/ runs_c/, 不会覆盖 Split A 的 runs/:
 #   SPLIT=split_b bash scripts/train_all_baselines.sh datasets/ /root/weights/mit_b0.pth
-#   # 一并把 DINO-Seg 也按对齐协议训了 (第 6 步):
+#   # 一并把 DINO-Seg 也训了 (第 6 步, 原生全图协议, 与 Split A 同配方):
 #   SPLIT=split_b WITH_DINOSEG=1 bash scripts/train_all_baselines.sh datasets/ /root/weights/mit_b0.pth
 #   # 对比表 (注意 --runs 与 --split-key 要对应):
 #   python scripts/compare_all.py --datasets datasets/ --runs runs_b --split-key split_b
@@ -35,6 +35,11 @@ BATCH_PSPNET="${BATCH_PSPNET:-4}"
 BATCH_SEGFORMER="${BATCH_SEGFORMER:-8}"
 BATCH_MASKFORMER="${BATCH_MASKFORMER:-4}"
 BATCH_DINOSEG="${BATCH_DINOSEG:-8}"
+DINOSEG_EPOCHS="${DINOSEG_EPOCHS:-120}"
+# DINO-Seg 用原生全图协议 (不裁剪): Split A 实测 512 裁剪对齐版 val 0.536
+# vs 原版 >=0.581 —— 冻结 ViT 的全图全局上下文是其核心优势, 裁剪伤主模型。
+# 消融需要时可用 DINOSEG_CROP=512 复现对齐版。
+DINOSEG_CROP="${DINOSEG_CROP:-}"
 WITH_DINOSEG="${WITH_DINOSEG:-0}"
 
 # 输出根目录: Split A 保持 runs/ (与已完成的表格/评测兼容); B/C 自动隔离到
@@ -64,7 +69,8 @@ should_run() {
 }
 
 echo "配置: split=$SPLIT -> $RUNS_ROOT/ | crop=$CROP epochs=$EPOCHS patience=$PATIENCE"
-echo "      batch: unet=$BATCH_UNET deeplab=$BATCH_DEEPLAB psp=$BATCH_PSPNET segf=$BATCH_SEGFORMER maskf=$BATCH_MASKFORMER dinoseg=$BATCH_DINOSEG (WITH_DINOSEG=$WITH_DINOSEG)"
+echo "      batch: unet=$BATCH_UNET deeplab=$BATCH_DEEPLAB psp=$BATCH_PSPNET segf=$BATCH_SEGFORMER maskf=$BATCH_MASKFORMER"
+echo "      dinoseg(第6步, WITH_DINOSEG=$WITH_DINOSEG): 全图 ${DINOSEG_EPOCHS}轮 batch=$BATCH_DINOSEG${DINOSEG_CROP:+ crop=$DINOSEG_CROP}"
 echo "HF_ENDPOINT=${HF_ENDPOINT:-<未设置>}  (timm 预训练骨干走 HF hub; 服务器连不上 huggingface.co 时先: export HF_ENDPOINT=https://hf-mirror.com)"
 
 if should_run unet; then
@@ -108,11 +114,11 @@ python -u scripts/train_baseline.py --model maskformer --pretrained 1 --batch "$
 fi
 
 if should_run dinoseg && [[ "$WITH_DINOSEG" == "1" ]]; then
-echo "[6/6] DINO-Seg (冻结 DINOv3 ViT-B/16 + 解码器; 与基线对齐协议: 同 crop/轮数/早停)"
-echo "  (编码器权重经 timm/HF 下载, 之前训练已缓存; lr 保留其解码器适配值 8e-4)"
+echo "[6/6] DINO-Seg (冻结 DINOv3 ViT-B/16 + 解码器; 原生全图协议, 不裁剪)"
+echo "  (与 Split A 的 DINO-Seg 同配方: 全图 120 轮; 编码器权重此前已缓存, lr 8e-4)"
 python -u scripts/train.py --datasets "$DATASETS" --split-key "$SPLIT" \
-  --crop "$CROP" --epochs "$EPOCHS" --patience "$PATIENCE" --batch "$BATCH_DINOSEG" \
-  --workers 4 --out "$RUNS_ROOT/dinoseg"
+  --epochs "$DINOSEG_EPOCHS" --patience "$PATIENCE" --batch "$BATCH_DINOSEG" \
+  --workers 4 --out "$RUNS_ROOT/dinoseg" ${DINOSEG_CROP:+--crop "$DINOSEG_CROP"}
 fi
 
 echo "全部训练结束 ($SPLIT -> $RUNS_ROOT/)。生成对比表:"

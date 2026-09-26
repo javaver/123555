@@ -213,7 +213,7 @@ python scripts/compare_all.py --datasets datasets/
 >
 > **断点续跑**：串训中断后 `FROM=deeplabv3 bash scripts/train_all_baselines.sh ...` 从指定模型继续（跳过已训完的，如已完成的 UNet）。
 >
-> **多划分 (B/C)**：`SPLIT=split_b WITH_DINOSEG=1 bash scripts/train_all_baselines.sh ...` 自动写入 `runs_b/`（不覆盖 Split A 的 `runs/`）；出表 `python scripts/compare_all.py --datasets datasets/ --runs runs_b --split-key split_b`。第 6 步 DINO-Seg 按与基线对齐的协议训练（同 crop/轮数/早停，`scripts/train.py --crop 512 --epochs 80 --patience 20`；lr 保留其解码器适配值 8e-4）。
+> **多划分 (B/C)**：`SPLIT=split_b WITH_DINOSEG=1 bash scripts/train_all_baselines.sh ...` 自动写入 `runs_b/`（不覆盖 Split A 的 `runs/`）；出表 `python scripts/compare_all.py --datasets datasets/ --runs runs_b --split-key split_b`。第 6 步 DINO-Seg 用**原生全图协议**（120 轮，不裁剪）——Split A 实测 512 裁剪对齐版反而掉 ~4.5 点（val 0.536 vs ≥0.581，冻结 ViT 的全图全局上下文是其核心优势，见 `runs/dinoseg_aligned` 消融），故各模型用各自最优配方、同一数据划分/损失/类权重/评测口径对比。
 
 - **DeepLabV3**：torchvision `deeplabv3_resnet50` **COCO 预训练**完整迁移（骨干+ASPP），再 21→10 类做 1×1 分类头移植（torchvision 硬校验不允许带 COCO 权重直接改类数）；权重文件 `deeplabv3_resnet50_coco-cd0a2569.pth` 在 `~/.cache/torch/hub/checkpoints/` 即离线加载；
 - **PSPNet / MaskFormer 骨干**：timm ResNet-50 ImageNet 预训练（timm ≥0.9 经 HuggingFace hub 下载；服务器连不上 huggingface.co 时先 `export HF_ENDPOINT=https://hf-mirror.com`，下载失败会给出该提示后退出）；

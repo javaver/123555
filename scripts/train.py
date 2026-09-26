@@ -5,9 +5,11 @@
     python scripts/train.py --datasets datasets/ [--config configs/dinoseg_vitb16_512.yaml]
     CPU 冒烟: python scripts/train.py --datasets datasets/ --pretrained 0 --epochs 1 --batch 2
 
-与基线对齐的协议 (推荐, 见 scripts/train_all_baselines.sh 的 WITH_DINOSEG=1):
-    python scripts/train.py --datasets datasets/ --crop 512 --epochs 80 --patience 20 \
-        --batch 8 --workers 4 --out runs/dinoseg_aligned
+原生协议 (默认, 与 Split A 的 DINO-Seg 同配方 —— 全图训练):
+    python scripts/train.py --datasets datasets/ --epochs 120 --patience 20 --workers 4
+512 裁剪对齐协议 (仅消融用: Split A 实测比全图掉 ~4.5 点 val mIoU,
+冻结 ViT 的全图全局上下文是 DINO-Seg 的核心优势):
+    python scripts/train.py --datasets datasets/ --crop 512 --epochs 80 --out runs/dinoseg_512crop
 """
 from __future__ import annotations
 
