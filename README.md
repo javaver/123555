@@ -212,6 +212,8 @@ python scripts/compare_all.py --datasets datasets/
 > **显存适配**：串训脚本默认 **训练期 512 随机裁剪 + 保守 batch**（按 ~11GB 显卡标定；1024 全图训练在 11GB 卡上 UNet batch=16 会 OOM；验证/测试仍全图评测，与 DINO-Seg 的 512 训练协议对齐）。显存富余可用环境变量调大：`BATCH_UNET=16 bash scripts/train_all_baselines.sh ...`；≥24GB 卡可 `CROP=1024` 全图训练（相应调小 batch）。
 >
 > **断点续跑**：串训中断后 `FROM=deeplabv3 bash scripts/train_all_baselines.sh ...` 从指定模型继续（跳过已训完的，如已完成的 UNet）。
+>
+> **多划分 (B/C)**：`SPLIT=split_b WITH_DINOSEG=1 bash scripts/train_all_baselines.sh ...` 自动写入 `runs_b/`（不覆盖 Split A 的 `runs/`）；出表 `python scripts/compare_all.py --datasets datasets/ --runs runs_b --split-key split_b`。第 6 步 DINO-Seg 按与基线对齐的协议训练（同 crop/轮数/早停，`scripts/train.py --crop 512 --epochs 80 --patience 20`；lr 保留其解码器适配值 8e-4）。
 
 - **DeepLabV3**：torchvision `deeplabv3_resnet50` **COCO 预训练**完整迁移（骨干+ASPP），再 21→10 类做 1×1 分类头移植（torchvision 硬校验不允许带 COCO 权重直接改类数）；权重文件 `deeplabv3_resnet50_coco-cd0a2569.pth` 在 `~/.cache/torch/hub/checkpoints/` 即离线加载；
 - **PSPNet / MaskFormer 骨干**：timm ResNet-50 ImageNet 预训练（timm ≥0.9 经 HuggingFace hub 下载；服务器连不上 huggingface.co 时先 `export HF_ENDPOINT=https://hf-mirror.com`，下载失败会给出该提示后退出）；

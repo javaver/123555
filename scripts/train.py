@@ -4,6 +4,10 @@
 用法:
     python scripts/train.py --datasets datasets/ [--config configs/dinoseg_vitb16_512.yaml]
     CPU 冒烟: python scripts/train.py --datasets datasets/ --pretrained 0 --epochs 1 --batch 2
+
+与基线对齐的协议 (推荐, 见 scripts/train_all_baselines.sh 的 WITH_DINOSEG=1):
+    python scripts/train.py --datasets datasets/ --crop 512 --epochs 80 --patience 20 \
+        --batch 8 --workers 4 --out runs/dinoseg_aligned
 """
 from __future__ import annotations
 
@@ -25,6 +29,14 @@ from torch.utils.data import DataLoader
 from ds_common import CLASS_NAMES, read_manifest, slug
 from dinoseg import ConfusionMeter, DINOvSeg, SegLoss
 from dinoseg.dataset import FeatureDataset, TileDataset
+
+
+def _reseed_aug_rng(worker_id: int) -> None:
+    """num_workers>0 时各 worker 继承同一份 Dataset.rng 状态, 会导致跨 worker
+    增强 (及随机裁剪) 序列完全重复; 用 PyTorch 分配的唯一 seed 重播种。"""
+    info = torch.utils.data.get_worker_info()
+    if info is not None and hasattr(info.dataset, "rng"):
+        info.dataset.rng.seed(info.seed)
 
 
 def load_rows(datasets: Path, want: str, key: str = "split_a"):
@@ -71,11 +83,22 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--run", default="dinoseg")
-    ap.add_argument("--split-key", default="split_a", choices=["split_a", "split_c"])
+    ap.add_argument("--out", type=Path, default=None,
+                    help="输出目录 (默认 runs/<run>/; Split B/C 用 runs_b/dinoseg 等隔离)")
+    ap.add_argument("--split-key", default="split_a", choices=["split_a", "split_b", "split_c"])
+    ap.add_argument("--crop", type=int, default=None,
+                    help="训练期随机方形裁剪边长 (如 512, 与基线协议对齐); 不设即全图。"
+                         "仅 TileDataset 端到端模式有效, --cache-dir 下忽略")
+    ap.add_argument("--patience", type=int, default=0,
+                    help="val mIoU 无提升则早停; 0=关闭 (与基线对齐用 20)")
+    ap.add_argument("--workers", type=int, default=0)
     ap.add_argument("--enc-ckpt", default=None, help="本地编码器权重 model.safetensors (HF 不通时用)")
     ap.add_argument("--cache-dir", type=Path, default=None,
                     help="预计算特征目录 (cache_features.py 产出); 设置后训练不跑编码器")
     a = ap.parse_args()
+
+    if a.cache_dir is not None and a.crop:
+        print("[warn] --cache-dir 模式的特征为全图预计算, --crop 被忽略。", flush=True)
 
     cfg = {"encoder": "vit_base_patch16_dinov3.lvd1689m", "epochs": 120,
            "batch": 8, "lr": 8e-4, "num_classes": 10}
@@ -96,11 +119,12 @@ def main() -> int:
         tr_ds = FeatureDataset(a.datasets, tr_rows, a.cache_dir, aug=True, seed=a.seed)
         va_ds = FeatureDataset(a.datasets, va_rows, a.cache_dir)
     else:
-        tr_ds = TileDataset(a.datasets, tr_rows, aug=True, seed=a.seed)
+        tr_ds = TileDataset(a.datasets, tr_rows, aug=True, seed=a.seed, crop=a.crop)
         va_ds = TileDataset(a.datasets, va_rows)
     tr_dl = DataLoader(tr_ds, batch_size=cfg["batch"], shuffle=True,
-                       num_workers=0, drop_last=False)
-    va_dl = DataLoader(va_ds, batch_size=2, num_workers=0)
+                       num_workers=a.workers, drop_last=False,
+                       worker_init_fn=_reseed_aug_rng)
+    va_dl = DataLoader(va_ds, batch_size=2, num_workers=a.workers)
 
     model = DINOvSeg(cfg["encoder"], pretrained=bool(a.pretrained),
                      num_classes=cfg["num_classes"],
@@ -117,13 +141,15 @@ def main() -> int:
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
-    run_dir = ROOT / "runs" / a.run
+    run_dir = a.out or (ROOT / "runs" / a.run)
     run_dir.mkdir(parents=True, exist_ok=True)
+    cfg.update({"crop": a.crop, "patience": a.patience, "split_key": a.split_key, "seed": a.seed})
     log_path = run_dir / "log.csv"
     with open(log_path, "w", newline="", encoding="utf-8") as fh:
         fh.write("epoch,loss,mIoU,mF1\n")
 
     best = -1.0
+    stale = 0
     for ep in range(1, cfg["epochs"] + 1):
         model.train()
         losses = []
@@ -149,15 +175,25 @@ def main() -> int:
         res = evaluate(model, va_dl, device, cfg["num_classes"])
         line = f"ep{ep:03d} loss={np.mean(losses):.4f} mIoU={res['mIoU']:.4f} " \
                f"mF1={res['mF1']:.4f} ({time.time() - t0:.0f}s)"
-        print(line)
+        print(line, flush=True)
         with open(log_path, "a", encoding="utf-8") as fh:
             fh.write(f"{ep},{np.mean(losses):.5f},{res['mIoU']:.5f},{res['mF1']:.5f}\n")
+
+        torch.save({"model": model.state_dict(), "cfg": cfg,
+                    "metrics": {k: float(v) for k, v in res.items() if np.isscalar(v)}},
+                   run_dir / "last.pt")
         if res["mIoU"] > best:
             best = res["mIoU"]
+            stale = 0
             torch.save({"model": model.state_dict(), "cfg": cfg,
                         "metrics": {k: float(v) for k, v in res.items() if np.isscalar(v)}},
                        run_dir / "best.pt")
-            print(f"  ^ 保存最佳 mIoU={best:.4f}")
+            print(f"  ^ 保存最佳 mIoU={best:.4f}", flush=True)
+        else:
+            stale += 1
+            if a.patience > 0 and stale >= a.patience:
+                print(f"early stop @ ep{ep} (patience={a.patience}), best={best:.4f}", flush=True)
+                break
     print(f"训练完成, 最佳 val mIoU={best:.4f}, ckpt -> {run_dir / 'best.pt'}")
     return 0
 
