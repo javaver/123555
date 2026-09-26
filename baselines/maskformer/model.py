@@ -10,6 +10,13 @@ Reference:
     2.0 * CE(类别, ∅ 权重 0.1) + 5.0 * BCE(掩膜) + 5.0 * Dice(掩膜)。
 推理时按论文语义装配 (semantic inference) 还原为逐像素 logits,
 与其余基线保持统一的 (B, K, H, W) 接口。
+
+与官方实现的已知差异 (论文表述请写"复现实现", 勿称官方 1:1):
+  - num_queries=50 (官方 ADE20K 配置为 100), 解码器 3 层 (官方 6 层);
+  - pixel decoder 为简化多尺度融合 (官方为标准 FPN);
+  - 掩膜损失在 1/4 分辨率全图计算 (官方 MaskFormer v1 同为低分辨率;
+    point sampling / MSDeformAttn 属 Mask2Former 机制, 本实现不含);
+  - 骨干为 timm ResNet-50 (features_only), 与官方一致但无 ImageNet-22K 变体。
 """
 from __future__ import annotations
 

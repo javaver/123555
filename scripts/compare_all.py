@@ -197,7 +197,7 @@ def eval_checkpoint(ckpt_path: Path, loader: DataLoader, device: torch.device) -
     for x, y in loader:
         logits = model(x.to(device))
         meter.update(logits.argmax(1).cpu().numpy(), y.numpy())
-    return meter.cm
+    return meter.mat  # ConfusionMeter 的混淆矩阵属性为 .mat ([gt, pred])
 
 
 def print_table1(rows: List[dict]) -> None:
@@ -276,7 +276,6 @@ def main() -> int:
 
     for m_name in models_to_compare:
         ckpt_path = ckpt_map[m_name]
-        is_local_evaluated = False
         perclass: Tuple[List[float], float] | None = None
 
         if ckpt_path.exists():
@@ -284,16 +283,15 @@ def main() -> int:
             cm = eval_checkpoint(ckpt_path, test_dl, device)
             metrics = compute_4elements_metrics(cm)
             perclass = compute_perclass_iou(cm)
-            is_local_evaluated = True
+            src_tag = "(eval)"
+        elif m_name in PAPER_REFERENCE:
+            print(f"-> 缺少 {ckpt_path}, 使用论文对照值 (paper)")
+            metrics = PAPER_REFERENCE[m_name]
+            src_tag = "(paper)"
         else:
-            if m_name in PAPER_REFERENCE:
-                print(f"-> 缺少 {ckpt_path}, 使用论文对照值 (paper)")
-                metrics = PAPER_REFERENCE[m_name]
-            else:
-                print(f"-> 缺少 {ckpt_path}, 且论文对照值尚未提供 ({m_name}), 以 '-' 占位")
-                metrics = None
-
-        src_tag = "(eval)" if is_local_evaluated else "(paper)"
+            print(f"-> 缺少 {ckpt_path}, 且论文对照值尚未提供 ({m_name}), 以 '-' 占位")
+            metrics = None
+            src_tag = "(n/a)"
 
         # ---- Table 1: 4 大核心要素 ----
         for metric_name in ["Precision", "Recall", "F1-score", "IoU"]:
@@ -324,6 +322,16 @@ def main() -> int:
     # ---- 终端打印双表 ----
     print_table1(table1_rows)
     print_table2(table2_rows)
+
+    # ---- 混排口径警示: (eval) 本地评测 与 (paper) 论文对照 混在一张表时 ----
+    tags = {r["Method"].rsplit(" ", 1)[-1] for r in table1_rows}
+    if "(eval)" in tags and ("(paper)" in tags or "(n/a)" in tags):
+        print("!" * 100)
+        print("!! [警示] 本表混排了本地评测 (eval) 与论文对照/缺失 (paper)/(n/a) 行 —— 二者数据划分与协议不同,")
+        print("!!        该表仅供进度预览, 严禁直接作为论文对比表使用 (例如论文 DINO-Seg IoU 0.7445")
+        print("!!        与本地 Split A 实测 ~0.59 属不同口径, 不可同列比较)。")
+        print("!!        正式出表: 训完全部模型后, 不加 --allow-paper-fallback 运行, 得到纯 (eval) 表。")
+        print("!" * 100)
 
     # ---- 导出 CSV: Table 1 ----
     header1 = ["Method", "Metric", "Traditional Buildings", "New Buildings", "Greenery", "Water Bodies", "Avg"]

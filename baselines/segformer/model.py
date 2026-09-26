@@ -12,6 +12,10 @@ Architecture (faithful to the paper):
     ``pretrained_from``).
   - Decoder: All-MLP decoder (linear fuse of the 4 pyramid stages at 1/4
     resolution, then a 1x1 classifier).
+
+实现说明 (论文表述请写"复现实现"): 解码器各阶段投影与融合采用
+Conv1x1 + BatchNorm + ReLU 变体 (与 mmseg 的 SegFormerHead 一致;
+官方 NVlabs 实现为 LayerNorm2d 变体), 其余结构与论文一致。
 """
 from __future__ import annotations
 
