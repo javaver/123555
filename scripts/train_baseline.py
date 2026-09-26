@@ -127,6 +127,11 @@ def main() -> int:
     )
     ap.add_argument("--epochs", type=int, default=80)
     ap.add_argument("--batch", type=int, default=8)
+    ap.add_argument(
+        "--crop", type=int, default=None,
+        help="训练时随机方形裁剪边长 (如 512)。1024 原图全分辨率显存不够时的标准做法, "
+             "验证/测试仍全图; 不设即全图训练",
+    )
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--workers", type=int, default=4)
@@ -149,7 +154,7 @@ def main() -> int:
     tr_rows = load_rows(a.datasets, "train", a.split_key)
     va_rows = load_rows(a.datasets, "val", a.split_key)
 
-    tr_ds = TileDataset(a.datasets, tr_rows, aug=True, seed=a.seed)
+    tr_ds = TileDataset(a.datasets, tr_rows, aug=True, seed=a.seed, crop=a.crop)
     va_ds = TileDataset(a.datasets, va_rows)
     tr_dl = DataLoader(
         tr_ds, batch_size=a.batch, shuffle=True, num_workers=a.workers,
@@ -226,6 +231,7 @@ def main() -> int:
         "lr": a.lr,
         "seed": a.seed,
         "pretrained": bool(a.pretrained),
+        "crop": a.crop,
         "pretrained_from": str(a.pretrained_from) if a.pretrained_from else None,
         "arch_kwargs": arch_kwargs,
         "num_classes": num_classes,

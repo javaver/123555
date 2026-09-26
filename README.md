@@ -209,6 +209,8 @@ bash scripts/train_all_baselines.sh datasets/ /root/weights/mit_b0.pth
 python scripts/compare_all.py --datasets datasets/
 ```
 
+> **显存适配**：串训脚本默认 **训练期 512 随机裁剪 + 保守 batch**（按 ~11GB 显卡标定；1024 全图训练在 11GB 卡上 UNet batch=16 会 OOM；验证/测试仍全图评测，与 DINO-Seg 的 512 训练协议对齐）。显存富余可用环境变量调大：`BATCH_UNET=16 bash scripts/train_all_baselines.sh ...`；≥24GB 卡可 `CROP=1024` 全图训练（相应调小 batch）。
+
 - **SegFormer**：编码器为仓库内 **MiT（mit_b0..mit_b5）**，`--pretrained-from` 加载 ImageNet 权重——NVlabs 官方 `mit_bX.pth` 直载，或 HF 官方 [`nvidia/mit-b0`](https://huggingface.co/nvidia/mit-b0) 的 `pytorch_model.bin`（transformers 新旧键名布局自动转换，100% 覆盖率硬校验）；`--pretrained` 对 MiT 无效；
 - **PSPNet**：ResNet-50（`output_stride=16` 空洞卷积，与 DeepLabV3 口径对齐）+ 金字塔池化模块（bins=1/2/3/6）聚合全局多尺度上下文；论文 4 要素对照值定稿后在 `scripts/compare_all.py` 的 `TODO(论文数值)` 处填入，此前无本地权重的 PSPNet 行以 `-` 占位；
 - **MaskFormer**：匈牙利匹配损失（类别 CE，∅ 权重 0.1 + 掩膜 BCE + Dice）；
