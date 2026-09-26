@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""生成论文 Table 1 格式的 4 大村落风貌核心要素对比表。
+"""生成论文双表对比: Table 1 四大村落风貌核心要素表 + Table 2 十类逐类 IoU 表。
 
-涵盖:
+Table 1 涵盖 4 大核心要素 (指标: Precision / Recall / F1-score / IoU):
   - Traditional Buildings (老建筑)
   - New Buildings (新建建筑)
   - Greenery (生态绿化: 山林 + 树木合并)
   - Water Bodies (水系水体)
   - Avg (四大要素平均)
 
-指标: Precision, Recall, F1-score, IoU
+Table 2 涵盖全部 10 类地物的逐类 IoU + 宏平均 mIoU (仅本地已训练模型可算,
+无检查点的模型以 "—" 占位——论文基准只提供 4 要素口径数值)。
 
 用法:
     python scripts/compare_all.py --datasets datasets/
@@ -74,6 +75,12 @@ PAPER_REFERENCE = {
         "IoU": [0.6530, 0.7355, 0.7802, 0.8093, 0.7445],
     },
 }
+
+# Table 2 终端打印用的短列名 (与 CLASS_NAMES 一一对应)
+CLASS_SHORT = [
+    "BareSoil", "CultLand", "Rail/Hwy", "MtnForest", "NakedMtn",
+    "NewBldg", "OldBldg", "Road", "Tree", "Water",
+]
 
 
 def load_test_rows(datasets: Path, key: str = "split_a"):
@@ -143,6 +150,19 @@ def compute_4elements_metrics(cm: np.ndarray) -> Dict[str, List[float]]:
     return results
 
 
+def compute_perclass_iou(cm: np.ndarray) -> Tuple[List[float], float]:
+    """从混淆矩阵计算 10 类逐类 IoU 与宏平均 mIoU。
+
+    宏平均只统计真实出现过的类 (gt 行和 > 0), 与 src/dinoseg/metrics.py 口径一致。
+    """
+    tp = np.diag(cm).astype(np.float64)
+    union = cm.sum(axis=1) + cm.sum(axis=0) - tp
+    iou = np.where(union > 0, tp / np.clip(union, 1e-9, None), 0.0)
+    present = cm.sum(axis=1) > 0
+    miou = float(iou[present].mean()) if present.any() else 0.0
+    return [float(v) for v in iou], miou
+
+
 @torch.no_grad()
 def eval_checkpoint(ckpt_path: Path, loader: DataLoader, device: torch.device) -> np.ndarray:
     ckpt = torch.load(ckpt_path, map_location="cpu")
@@ -159,8 +179,13 @@ def eval_checkpoint(ckpt_path: Path, loader: DataLoader, device: torch.device) -
         )
         model.load_state_dict(ckpt["model"])
     elif "arch" in ckpt:
-        # Baseline model
-        model = get_baseline_model(ckpt["arch"], num_classes=num_classes, pretrained=False)
+        # Baseline model (arch_kwargs 携带骨干等架构参数, 如 segformer 的 mit_b0)
+        model = get_baseline_model(
+            ckpt["arch"],
+            num_classes=num_classes,
+            pretrained=False,
+            **ckpt.get("arch_kwargs", {}),
+        )
         model.load_state_dict(ckpt["model"])
     else:
         raise ValueError(f"无法识别检查点结构: {ckpt_path}")
@@ -174,12 +199,41 @@ def eval_checkpoint(ckpt_path: Path, loader: DataLoader, device: torch.device) -
     return meter.cm
 
 
+def print_table1(rows: List[dict]) -> None:
+    header = ["Method", "Metric", "Traditional Buildings", "New Buildings", "Greenery", "Water Bodies", "Avg"]
+    print("\n" + "=" * 105)
+    print("Table 1. Quantitative comparison of 4 core village elements (P / R / F1 / IoU)")
+    print("=" * 105)
+    print(f"{header[0]:14s} | {header[1]:10s} | {header[2]:21s} | {header[3]:13s} | {header[4]:10s} | {header[5]:12s} | {header[6]:8s}")
+    print("-" * 105)
+    for r in rows:
+        print(
+            f"{r['Method']:14s} | {r['Metric']:10s} | {r['Traditional Buildings']:>21s} | "
+            f"{r['New Buildings']:>13s} | {r['Greenery']:>10s} | {r['Water Bodies']:>12s} | {r['Avg']:>8s}"
+        )
+    print("-" * 105)
+
+
+def print_table2(rows: List[dict]) -> None:
+    print("\n" + "=" * 120)
+    print("Table 2. Per-class IoU comparison on the traditional village dataset (10 classes + mIoU)")
+    print("=" * 120)
+    head = f"{'Method':14s} | " + " | ".join(f"{c:>9s}" for c in CLASS_SHORT) + f" | {'mIoU':>8s}"
+    print(head)
+    print("-" * 120)
+    for r in rows:
+        vals = " | ".join(f"{r[c]:>9s}" for c in CLASS_SHORT)
+        print(f"{r['Method']:14s} | {vals} | {r['mIoU']:>8s}")
+    print("-" * 120)
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="对比评估 Table 1")
+    ap = argparse.ArgumentParser(description="对比评估: 论文 Table 1 + Table 2 双表")
     ap.add_argument("--datasets", type=Path, default=Path("datasets"))
     ap.add_argument("--split-key", default="split_a")
     ap.add_argument("--runs", type=Path, default=Path("runs"))
     ap.add_argument("--out", type=Path, default=Path("runs/comparison_table1.csv"))
+    ap.add_argument("--out2", type=Path, default=Path("runs/comparison_table2.csv"))
     a = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -198,41 +252,30 @@ def main() -> int:
         "DINO-Seg": a.runs / "dinoseg" / "best.pt",
     }
 
-    final_table = []
-    print("\n" + "=" * 80)
-    print("Table 1. Quantitative comparison of different methods on traditional village dataset")
-    print("=" * 80)
-
-    header = ["Method", "Metric", "Traditional Buildings", "New Buildings", "Greenery", "Water Bodies", "Avg"]
-    print(f"{header[0]:14s} | {header[1]:10s} | {header[2]:21s} | {header[3]:13s} | {header[4]:10s} | {header[5]:12s} | {header[6]:8s}")
-    print("-" * 105)
+    table1_rows: List[dict] = []
+    table2_rows: List[dict] = []
 
     for m_name in models_to_compare:
         ckpt_path = ckpt_map[m_name]
         is_local_evaluated = False
+        perclass: Tuple[List[float], float] | None = None
 
         if ckpt_path.exists():
             print(f"-> 发现本地检查点: {ckpt_path}, 正在测试集评测...")
             cm = eval_checkpoint(ckpt_path, test_dl, device)
             metrics = compute_4elements_metrics(cm)
+            perclass = compute_perclass_iou(cm)
             is_local_evaluated = True
         else:
-            # 使用原论文基准对照
+            # Table 1 使用原论文基准对照; Table 2 论文未提供逐类数值, 以 "-" 占位
             metrics = PAPER_REFERENCE[m_name]
 
         src_tag = "(eval)" if is_local_evaluated else "(paper)"
 
-        for idx, metric_name in enumerate(["Precision", "Recall", "F1-score", "IoU"]):
+        # ---- Table 1: 4 大核心要素 ----
+        for metric_name in ["Precision", "Recall", "F1-score", "IoU"]:
             vals = metrics[metric_name]
-            method_col = f"{m_name} {src_tag}" if idx == 0 else ""
-            row_str = (
-                f"{method_col:14s} | {metric_name:10s} | "
-                f"{vals[0]:21.4f} | {vals[1]:13.4f} | "
-                f"{vals[2]:10.4f} | {vals[3]:12.4f} | "
-                f"{vals[4]:8.4f}"
-            )
-            print(row_str)
-            final_table.append({
+            table1_rows.append({
                 "Method": f"{m_name} {src_tag}",
                 "Metric": metric_name,
                 "Traditional Buildings": f"{vals[0]:.4f}",
@@ -241,15 +284,41 @@ def main() -> int:
                 "Water Bodies": f"{vals[3]:.4f}",
                 "Avg": f"{vals[4]:.4f}",
             })
-        print("-" * 105)
 
-    # 导出 CSV
+        # ---- Table 2: 10 类逐类 IoU + mIoU ----
+        row2: Dict[str, str] = {"Method": f"{m_name} {src_tag}"}
+        if perclass is not None:
+            ious, miou = perclass
+            for cname, v in zip(CLASS_NAMES, ious):
+                row2[cname] = f"{v:.4f}"
+            row2["mIoU"] = f"{miou:.4f}"
+        else:
+            for cname in CLASS_NAMES:
+                row2[cname] = "-"
+            row2["mIoU"] = "-"
+        table2_rows.append(row2)
+
+    # ---- 终端打印双表 ----
+    print_table1(table1_rows)
+    print_table2(table2_rows)
+
+    # ---- 导出 CSV: Table 1 ----
+    header1 = ["Method", "Metric", "Traditional Buildings", "New Buildings", "Greenery", "Water Bodies", "Avg"]
     a.out.parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "w", newline="", encoding="utf-8-sig") as fh:
-        writer = csv.DictWriter(fh, fieldnames=header)
+        writer = csv.DictWriter(fh, fieldnames=header1)
         writer.writeheader()
-        writer.writerows(final_table)
-    print(f"\n[OK] 对比总表已导出 -> {a.out}\n")
+        writer.writerows(table1_rows)
+    print(f"\n[OK] Table 1 已导出 -> {a.out}")
+
+    # ---- 导出 CSV: Table 2 ----
+    header2 = ["Method"] + list(CLASS_NAMES) + ["mIoU"]
+    a.out2.parent.mkdir(parents=True, exist_ok=True)
+    with open(a.out2, "w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.DictWriter(fh, fieldnames=header2)
+        writer.writeheader()
+        writer.writerows(table2_rows)
+    print(f"[OK] Table 2 已导出 -> {a.out2}\n")
     return 0
 
 

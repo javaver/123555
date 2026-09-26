@@ -4,5 +4,6 @@ numpy>=1.24
 
 # M2/M3 训练阶段
 torch>=2.1
-timm>=1.0.20        # 含 DINOv3 权重映射 (lvd1689m / sat493m)
+timm>=1.0.20        # 含 DINOv3 权重映射 (lvd1689m / sat493m); 当前版本无 SegFormer/MiT, 故 MiT 为仓库内实现
+scipy>=1.10         # MaskFormer 匈牙利二分图匹配 (linear_sum_assignment)
 PyYAML>=6.0

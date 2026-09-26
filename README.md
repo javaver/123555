@@ -189,7 +189,7 @@ python scripts/infer.py \
 - 自动滤除非村庄区域（黑边填充）；
 - 输出逐图单通道掩膜 PNG 及 `runs/pred_new/proportions.csv`。
 
-### 7. 五大基线算法训练与论文 Table 1 对比表生成
+### 7. 五大基线算法训练与论文双表（Table 1 + Table 2）对比生成
 
 仓库内置了 5 大最具代表性的经典与前沿基线算法（涵盖 CNN 跳跃连接、空洞卷积金字塔、Transformer 特征重组、层级化自注意力与掩膜分类）：
 
@@ -199,14 +199,18 @@ python scripts/train_baseline.py --model unet --datasets datasets/ --batch 16 --
 python scripts/train_baseline.py --model deeplabv3 --datasets datasets/ --batch 16 --epochs 80
 python scripts/train_baseline.py --model dpt --datasets datasets/ --batch 16 --epochs 80
 python scripts/train_baseline.py --model segformer --datasets datasets/ --batch 16 --epochs 80
+python scripts/train_baseline.py --model segformer --backbone mit_b2 --datasets datasets/   # 更大 MiT 骨干
 python scripts/train_baseline.py --model maskformer --datasets datasets/ --batch 16 --epochs 80
 
-# 一键生成论文 Table 1 (4 大村落核心风貌要素: 传统建筑、新建建筑、生态绿化、水体水系及 Avg)
+# 一键生成论文双表 (Table 1 四大风貌核心要素 + Table 2 十类逐类 IoU/mIoU)
 python scripts/compare_all.py --datasets datasets/
 ```
+
+- **SegFormer**：编码器为仓库内实现的 **MiT（Mix Transformer, mit_b0..mit_b5）**，与 NVlabs 官方 `mit_bX.pth` ImageNet 权重键名兼容（`--backbone mit_b0` 默认，亦可用 `--backbone pvt_v2_b0` 等 timm 骨干兼容旧配置）；
+- **MaskFormer**：训练采用论文标准的**二分图匹配（匈牙利算法）损失**（类别 CE，∅ 权重 0.1 + 掩膜 BCE + Dice，权重 2/5/5），推理经语义装配还原为逐像素 logits；
 - 自动读取各个模型的最佳权重 `runs/<model>/best.pt`；
-- 输出终端 Markdown 表格并自动导出 `runs/comparison_table1.csv`；
-- 若本地尚未训练某基线，脚本自动填入原论文基准对照值 `(paper)`。
+- **Table 1** 输出 4 大村落核心风貌要素（传统建筑、新建建筑、生态绿化、水体水系及 Avg）的 P/R/F1/IoU，导出 `runs/comparison_table1.csv`；若本地尚未训练某基线，自动填入原论文基准对照值 `(paper)`；
+- **Table 2** 输出全部 10 类地物逐类 IoU 与宏平均 mIoU，导出 `runs/comparison_table2.csv`（论文基准未提供逐类数值，未训练模型以 `-` 占位）。
 
 ---
 
@@ -218,8 +222,10 @@ python scripts/compare_all.py --datasets datasets/
 │   ├── unet/                          # 经典 U-Net (Skip Connections)
 │   ├── deeplabv3/                     # DeepLabV3 (ResNet-50 + ASPP)
 │   ├── dpt/                           # DPT (ViT + Reassemble Blocks)
-│   ├── segformer/                     # SegFormer (MiT + All-MLP Decoder)
+│   ├── segformer/                     # SegFormer (仓库内 MiT 编码器 + All-MLP Decoder)
+│   │   └── mit.py                     # Mix Transformer (mit_b0..b5), 兼容官方权重键名
 │   └── maskformer/                    # MaskFormer (Mask-Classification)
+│       └── criterion.py               # 匈牙利二分图匹配损失 (CE + BCE + Dice)
 ├── configs/
 │   └── dinoseg_vitb16_512.yaml        # 模型与训练超参数配置
 ├── docs/
@@ -231,7 +237,8 @@ python scripts/compare_all.py --datasets datasets/
 │   │   └── metrics_test.csv           # 测试集指标表
 │   ├── pred_masks/                    # 1175 张切片预测掩膜
 │   ├── pred_new/                      # 新图预测掩膜与 proportions.csv
-│   └── comparison_table1.csv          # 论文 Table 1 全模型对比总表
+│   ├── comparison_table1.csv          # 论文 Table 1 四要素对比总表
+│   └── comparison_table2.csv          # 论文 Table 2 十类逐类 IoU 对比总表
 ├── datasets/
 │   ├── analysis/
 │   │   ├── proportions_gt.csv         # 真实标注 1175 切片要素占比
@@ -243,8 +250,8 @@ python scripts/compare_all.py --datasets datasets/
 │   └── splits.csv                     # A/B/C 三档数据划分
 ├── scripts/
 │   ├── train.py                       # DINO-Seg 训练主入口
-│   ├── train_baseline.py              # 统一基线训练入口 (--model unet/deeplabv3/...)
-│   ├── compare_all.py                 # 论文 Table 1 核心对比总表生成器
+│   ├── train_baseline.py              # 统一基线训练入口 (--model unet/deeplabv3/..., --backbone 覆盖骨干)
+│   ├── compare_all.py                 # 论文双表生成器 (Table 1 四要素 + Table 2 逐类 IoU)
 │   ├── eval.py                        # 评估入口（Macro + Micro 全口径）
 │   ├── infer.py                       # 推理入口（支持全集切片与任意尺寸外部新图）
 │   └── cache_features.py              # DINOv3 特征离线缓存
