@@ -234,8 +234,10 @@ def main() -> int:
     ap.add_argument("--datasets", type=Path, default=Path("datasets"))
     ap.add_argument("--split-key", default="split_a")
     ap.add_argument("--runs", type=Path, default=Path("runs"))
-    ap.add_argument("--out", type=Path, default=Path("runs/comparison_table1.csv"))
-    ap.add_argument("--out2", type=Path, default=Path("runs/comparison_table2.csv"))
+    ap.add_argument("--out", type=Path, default=None,
+                    help="Table1 输出路径 (默认跟随 --runs: <runs>/comparison_table1.csv)")
+    ap.add_argument("--out2", type=Path, default=None,
+                    help="Table2 输出路径 (默认跟随 --runs: <runs>/comparison_table2.csv)")
     ap.add_argument(
         "--allow-paper-fallback",
         action="store_true",
@@ -333,23 +335,25 @@ def main() -> int:
         print("!!        正式出表: 训完全部模型后, 不加 --allow-paper-fallback 运行, 得到纯 (eval) 表。")
         print("!" * 100)
 
-    # ---- 导出 CSV: Table 1 ----
+    # ---- 导出 CSV: Table 1 (未显式指定 --out 时跟随 --runs, 避免 Split B/C 覆盖 runs/) ----
+    out1 = a.out or (a.runs / "comparison_table1.csv")
+    out2 = a.out2 or (a.runs / "comparison_table2.csv")
     header1 = ["Method", "Metric", "Traditional Buildings", "New Buildings", "Greenery", "Water Bodies", "Avg"]
-    a.out.parent.mkdir(parents=True, exist_ok=True)
-    with open(a.out, "w", newline="", encoding="utf-8-sig") as fh:
+    out1.parent.mkdir(parents=True, exist_ok=True)
+    with open(out1, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.DictWriter(fh, fieldnames=header1)
         writer.writeheader()
         writer.writerows(table1_rows)
-    print(f"\n[OK] Table 1 已导出 -> {a.out}")
+    print(f"\n[OK] Table 1 已导出 -> {out1}")
 
     # ---- 导出 CSV: Table 2 ----
     header2 = ["Method"] + list(CLASS_NAMES) + ["mIoU"]
-    a.out2.parent.mkdir(parents=True, exist_ok=True)
-    with open(a.out2, "w", newline="", encoding="utf-8-sig") as fh:
+    out2.parent.mkdir(parents=True, exist_ok=True)
+    with open(out2, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.DictWriter(fh, fieldnames=header2)
         writer.writeheader()
         writer.writerows(table2_rows)
-    print(f"[OK] Table 2 已导出 -> {a.out2}\n")
+    print(f"[OK] Table 2 已导出 -> {out2}\n")
     return 0
 
 

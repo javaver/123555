@@ -36,6 +36,10 @@ BATCH_SEGFORMER="${BATCH_SEGFORMER:-8}"
 BATCH_MASKFORMER="${BATCH_MASKFORMER:-4}"
 BATCH_DINOSEG="${BATCH_DINOSEG:-8}"
 DINOSEG_EPOCHS="${DINOSEG_EPOCHS:-120}"
+# DINO-Seg 早停默认关闭 (patience 0): Split A 的 DINO-Seg 是跑满 120 轮无早停的,
+# B/C 须严格同配方才能进 mean±std (Split B 实测 ep60 早停版 0.5559, 是唯一
+# A->B 掉分的模型; 如需省算力可 DINOSEG_PATIENCE=20)。
+DINOSEG_PATIENCE="${DINOSEG_PATIENCE:-0}"
 # DINO-Seg 用原生全图协议 (不裁剪): Split A 实测 512 裁剪对齐版 val 0.536
 # vs 原版 >=0.581 —— 冻结 ViT 的全图全局上下文是其核心优势, 裁剪伤主模型。
 # 消融需要时可用 DINOSEG_CROP=512 复现对齐版。
@@ -115,9 +119,9 @@ fi
 
 if should_run dinoseg && [[ "$WITH_DINOSEG" == "1" ]]; then
 echo "[6/6] DINO-Seg (冻结 DINOv3 ViT-B/16 + 解码器; 原生全图协议, 不裁剪)"
-echo "  (与 Split A 的 DINO-Seg 同配方: 全图 120 轮; 编码器权重此前已缓存, lr 8e-4)"
+echo "  (与 Split A 的 DINO-Seg 同配方: 全图 ${DINOSEG_EPOCHS}轮, 早停=${DINOSEG_PATIENCE}; 编码器权重此前已缓存, lr 8e-4)"
 python -u scripts/train.py --datasets "$DATASETS" --split-key "$SPLIT" \
-  --epochs "$DINOSEG_EPOCHS" --patience "$PATIENCE" --batch "$BATCH_DINOSEG" \
+  --epochs "$DINOSEG_EPOCHS" --patience "$DINOSEG_PATIENCE" --batch "$BATCH_DINOSEG" \
   --workers 4 --out "$RUNS_ROOT/dinoseg" ${DINOSEG_CROP:+--crop "$DINOSEG_CROP"}
 fi
 
