@@ -29,7 +29,7 @@ def main() -> int:
     ap.add_argument("--datasets", type=Path, default=Path("datasets"))
     ap.add_argument("--ckpt", type=Path, required=True)
     ap.add_argument("--split", default="test")
-    ap.add_argument("--split-key", default="split_a", choices=["split_a", "split_c"])
+    ap.add_argument("--split-key", default="split_a", choices=["split_a", "split_b", "split_c"])
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args()
 
