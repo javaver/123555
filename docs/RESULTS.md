@@ -1,0 +1,94 @@
+# 实验结果定稿: 传统村落 10 类语义分割 (Split A/B/C)
+
+> 由 `compare_all.py` (各划分 test 集, 1024² 全图评测) + `aggregate_splits.py` 生成;
+> std 为样本标准差 (n-1)。各划分明细见 `runs*/comparison_table{1,2}.csv`, 汇总见 `runs/splits_summary*.csv`。
+> 复现命令见 README「服务器工作流」与「多划分 (B/C)」。
+
+## 1. 主表: 三划分 test mIoU
+
+| Method | Split A | Split B (村庄级泛化) | Split C (空间去偏) | mIoU mean±std |
+|---|---|---|---|---|
+| DeepLabV3 † | 0.6231 | 0.5183 | 0.6292 | **0.5902±0.0623** |
+| MaskFormer | 0.6202 | 0.5159 | 0.6267 | 0.5876±0.0622 |
+| SegFormer | 0.6085 | 0.5053 | 0.6160 | 0.5766±0.0619 |
+| DINO-Seg | 0.5940 | 0.4961 | 0.5563 | 0.5488±0.0494 |
+| PSPNet | 0.5860 | 0.4813 | 0.5782 | 0.5485±0.0583 |
+| UNet | 0.5396 | 0.4575 | 0.5375 | 0.5115±0.0468 |
+
+† DeepLabV3 骨干+ASPP 为 torchvision **COCO 预训练**迁移 (21→10 类头移植); 其余基线为 ImageNet 预训练 (PSPNet/SegFormer/MaskFormer) 或随机初始化 (UNet)。
+
+LaTeX:
+
+```latex
+\begin{table}[t]
+\centering
+\caption{Three-split test mIoU (mean$\pm$std, $n{=}3$). Split~B holds out entire villages (generalization); Split~C uses spatial-block partitioning (de-biased).}
+\label{tab:main}
+\begin{tabular}{lcccc}
+\toprule
+Method & Split A & Split B & Split C & mIoU (mean$\pm$std) \\
+\midrule
+DeepLabV3$^\dagger$ & 0.6231 & 0.5183 & 0.6292 & \textbf{0.5902±0.0623} \\
+MaskFormer          & 0.6202 & 0.5159 & 0.6267 & 0.5876±0.0622 \\
+SegFormer           & 0.6085 & 0.5053 & 0.6160 & 0.5766±0.0619 \\
+DINO-Seg            & 0.5940 & 0.4961 & 0.5563 & 0.5488±0.0494 \\
+PSPNet              & 0.5860 & 0.4813 & 0.5782 & 0.5485±0.0583 \\
+UNet                & 0.5396 & 0.4575 & 0.5375 & 0.5115±0.0468 \\
+\bottomrule
+\multicolumn{5}{l}{\footnotesize $^\dagger$DeepLabV3: torchvision COCO-pretrained backbone+ASPP, head transplanted 21$\to$10 classes.}
+\end{tabular}
+\end{table}
+```
+
+## 2. 四要素宏平均 (P/R/F1/IoU, mean±std)
+
+| Method | Precision | Recall | F1 | IoU |
+|---|---|---|---|---|
+| DeepLabV3 | **0.8720±0.0122** | 0.8373±0.0353 | **0.8509±0.0199** | **0.7578±0.0261** |
+| MaskFormer | 0.8638±0.0136 | 0.8397±0.0239 | 0.8505±0.0177 | 0.7559±0.0238 |
+| SegFormer | 0.8342±0.0184 | **0.8522±0.0326** | 0.8413±0.0235 | 0.7432±0.0331 |
+| DINO-Seg | 0.7899±0.0163 | 0.8416±0.0231 | 0.8035±0.0227 | 0.7010±0.0282 |
+| PSPNet | 0.8067±0.0345 | 0.8345±0.0453 | 0.8126±0.0050 | 0.7061±0.0088 |
+| UNet | 0.7877±0.0063 | 0.8404±0.0178 | 0.8039±0.0052 | 0.6963±0.0078 |
+
+## 3. 逐类 IoU mean±std
+
+<!-- TODO: 以更新后的 runs/splits_summary_perclass.csv 填充 (B 的 DINO-Seg 补跑后需重新聚合) -->
+
+## 4. 消融 (DINO-Seg, Split A)
+
+### 4.1 训练协议
+
+| 协议 | val best | test mIoU |
+|---|---|---|
+| 全图 1024² × 120 轮 (默认) | 0.5838 | **0.5940** |
+| 512 随机裁剪 × 80 轮 (对齐基线协议) | 0.5362 | 待评 |
+
+冻结 ViT 的全图全局上下文 (64×64 token 网格) 是 DINO-Seg 的核心优势; 裁剪到 512 后上下文减半, 轻量解码器 (7.56M) 无法弥补。
+
+### 4.2 编码器预训练域
+
+| 编码器 | val best | test mIoU | 显著逐类变化 (vs ViT-B) |
+|---|---|---|---|
+| ViT-B/16 DINOv3-LVD (网络图像域, 默认) | 0.5838 | **0.5940** | — |
+| ViT-L/16 DINOv3-SAT493M (遥感域) | 0.5856 | 0.5834 | road +3.5, tree +3.1; naked mountain −10.1, old building −4.7 |
+
+域匹配预训练改善了 road/tree 等纹理-线性类, 但 naked mountain/old building 显著退化, 净效应 −1.1 点。
+
+## 5. 协议与口径说明
+
+- **数据划分**: A = 瓦片分层随机 (对标论文口径); B = 村庄级留出 (泛化); C = 空间块整折 (去邻片泄漏)。
+- **训练**: 5 个基线 = 512 随机裁剪 × 80 轮 (早停 patience 20, AdamW 3e-4 cosine); DINO-Seg = 全图 × 120 轮 (不早停; A/B/C 三划分同配方)。损失 (CE+Dice)、类权重 (median/freq 截断 [1,20])、几何增强、随机种子一致。
+- **评测**: test 划分全图 1024², 逐像素混淆矩阵; 选模用各划分 val。
+- **DINO-Seg**: 冻结 DINOv3 ViT-B/16 编码器 (no_grad fp16 前向), 仅训练解码器 **7.56M** 参数; DeepLabV3 全量微调 39.6M。
+
+## 6. 主要观察 (讨论素材)
+
+1. **现代预训练基线领先**: DeepLabV3 (COCO) > MaskFormer ≈ SegFormer; 该数据规模下全量微调的强基线不易被超越。
+2. **DINO-Seg 与 PSPNet 统计打平** (0.5488 vs 0.5485), 但:
+   - 跨划分方差最小 (0.0494, 除始终垫底的 UNet 外);
+   - 跨村泛化跌幅 −0.098, 小于全部微调基线 (−0.103 ~ −0.105) —— 冻结通用特征跨村更稳健;
+   - 可训练参数仅为 DeepLabV3 的 ~1/5 (7.56M vs 39.6M)。
+3. **Split B (村庄级) 对所有方法最难** (均匀 −0.10 左右), 说明跨村泛化是该村落数据的主要挑战。
+4. **A→C 观察**: 空间去偏后各方法基本持平 (±0.8 点内), 唯 DINO-Seg 降 3.8 点 —— 对邻片泄漏相对更敏感, 值得讨论。
+5. **共性难点**: Water 最易 (0.91-0.95); Road / Old building / Naked mountain / Bare soil 对所有方法最难。
