@@ -24,14 +24,20 @@ def normalize_array(img: Image.Image) -> torch.Tensor:
 
 
 class TileDataset(Dataset):
+    """aug=True 时启用翻转/旋转/光度增强; crop=N 时再随机裁 N×N 方形窗口
+    (仅建议训练集使用 —— 1024 原图全分辨率训练显存开销大, 512 裁剪是
+    分割训练标准做法, 且与 DINO-Seg 的 512 协议对齐; 验证/测试仍全图)。"""
+
     def __init__(self, root, rows, aug: bool = False,
-                 mean=IMAGENET_MEAN, std=IMAGENET_STD, seed: int = 42):
+                 mean=IMAGENET_MEAN, std=IMAGENET_STD, seed: int = 42,
+                 crop: int | None = None):
         self.root = root
         self.rows = rows
         self.aug = aug
         self.mean = np.array(mean, dtype=np.float32)
         self.std = np.array(std, dtype=np.float32)
         self.rng = random.Random(seed)
+        self.crop = crop
 
     def __len__(self):
         return len(self.rows)
@@ -58,6 +64,15 @@ class TileDataset(Dataset):
                 img2 = ImageEnhance.Contrast(img2).enhance(self.rng.uniform(0.8, 1.2))
             a = np.asarray(img2).astype(np.float32) / 255.0
             a = np.ascontiguousarray(a)
+
+        # 随机方形裁剪 (仅训练; img/mask 必须同一窗口, 复用 self.rng —— worker
+        # 级重播种保证跨 worker/epoch 裁剪位置多样)
+        if self.crop is not None and min(a.shape[:2]) >= self.crop:
+            i0 = self.rng.randrange(a.shape[0] - self.crop + 1)
+            j0 = self.rng.randrange(a.shape[1] - self.crop + 1)
+            a = np.ascontiguousarray(a[i0:i0 + self.crop, j0:j0 + self.crop])
+            m = m[i0:i0 + self.crop, j0:j0 + self.crop]
+
         m = np.ascontiguousarray(m)
 
         a = (a - self.mean) / self.std

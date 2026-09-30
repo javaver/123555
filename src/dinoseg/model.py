@@ -53,7 +53,8 @@ class FrozenDINOv3Encoder(nn.Module):
         self._feats = []
         # 编码器前向用 fp16 加速(无 backward, 不会溢出); 解码器/反向全程 fp32,
         # 规避 fp16 反向经 ~1e3 量级特征时 GradScaler 梯度溢出 -> NaN
-        with torch.no_grad(), torch.amp.autocast("cuda"):
+        use_cuda = x.is_cuda
+        with torch.no_grad(), torch.amp.autocast("cuda", enabled=use_cuda):
             self.enc(x)
         b = x.shape[0]
         h = x.shape[-2] // self.patch

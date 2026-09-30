@@ -15,3 +15,6 @@ outputs/
 __pycache__/
 *.pyc
 
+
+# 训练日志
+train.log
